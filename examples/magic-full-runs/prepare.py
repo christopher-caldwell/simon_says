@@ -27,6 +27,12 @@ def main():
     if target.exists() or target.is_relative_to(source) or git('status', '--porcelain=v1', cwd=source):
         raise ValueError('target must be new/outside source and source must be clean')
     subprocess.run(['git', 'clone', '--no-hardlinks', '--', str(source), str(target)], check=True)
+    workflow_path = target / 'workflow.toml'
+    workflow = workflow_path.read_text().replace('ten isolated native diagnostic games', 'four isolated native diagnostic games')
+    if workflow == workflow_path.read_text():
+        raise ValueError('expected ten-game workflow purpose missing; refuse drift')
+    workflow_path.write_text(workflow)
+    (target / 'README.md').write_text('Isolated four-game role-handoff diagnostic. See frozen workflow.toml and instructions. This is not a production study.\n')
     for name in ('native_tool.py', 'review.py', 'investigate.md', 'supervise.md', 'analyze.md'):
         shutil.copyfile(HERE / name, target / name)
     config = json.loads((target / 'diagnostic.json').read_text())
