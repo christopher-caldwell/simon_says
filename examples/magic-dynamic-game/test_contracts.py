@@ -41,6 +41,31 @@ class Classification(unittest.TestCase):
         del denom['trialStates']['pending']; denom['trialStates']['excluded'] = 3
         self.assertFalse(game.valid_denominators(denom, 6))
 
+    def test_nonempty_wal_must_not_be_ignored(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); game.require_checkpointed_sqlite(root)
+            (root / 'native.sqlite-wal').write_bytes(b'pending')
+            with self.assertRaises(ValueError):
+                game.require_checkpointed_sqlite(root)
+
+    def test_issue_requires_per_attempt_attribution(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); attempts = root / 'runs' / 'r' / 'attempts'; attempts.mkdir(parents=True)
+            rows = []
+            for i in range(10):
+                path = attempts / str(i); path.mkdir()
+                excluded = i < 4
+                (path / 'stderr.log').write_text(game.DIAGNOSTIC if excluded else '')
+                rows.append((str(i), i, 'excluded' if excluded else 'accepted', 0 if excluded else 1, str(path), json.dumps(['unsupported_engine_behavior'] if excluded else [])))
+            quality = self.quality({game.DIAGNOSTIC: 4}, {'unsupported_engine_behavior': 4})
+            self.assertEqual(len(game.attribution(rows, root, 'r', quality, 'issues')), 4)
+            (attempts / '0' / 'stderr.log').write_text('')
+            with self.assertRaises(ValueError):
+                game.attribution(rows, root, 'r', quality, 'issues')
+            quality['engineDiagnostics'][game.DIAGNOSTIC] = 3
+            with self.assertRaises(ValueError):
+                game.attribution(rows, root, 'r', quality, 'issues')
+
     def test_build_source_must_be_exact_reviewed_repair(self):
         packet = {'baseline_commit': 'good', 'last_transition': {'from_stage': 'repair', 'to_stage': 'build', 'reviewed_commit': 'good'}}
         native.require_repair_transition(packet, 'good')
