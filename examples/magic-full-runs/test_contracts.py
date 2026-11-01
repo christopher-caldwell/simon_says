@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Exercise exclusion-preserving handoff without running providers or games."""
 import importlib.util
+import contextlib
+import io
+import runpy
+import types
 import json
 import os
 from pathlib import Path
@@ -103,6 +107,35 @@ class ReviewFeedback(unittest.TestCase):
         self.assertIn('packet.run_context', message)
         self.assertIn('collection.eligible', message)
         self.assertIn('collection.issues', message)
+
+
+class InducedCorrection(unittest.TestCase):
+    def test_missing_excluded_count_requests_one_correction_then_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'packet.json').write_text(json.dumps({'action_id':'test','gate':'reviewer','candidate_commit':'head','run_context':'question'}))
+            collection = {'assigned':4,'eligible':3,'issues':[{'kind':'exclusion'}]}
+            analysis = {'original_question':'question','verified_games':3,'issues':[{'kind':'exclusion'}, {'kind':'extra'}]}
+            (root/'collection.json').write_text(json.dumps(collection))
+            native = types.ModuleType('native_tool')
+            native.mirror_verify = lambda _: {'eligibleGames':3}
+            old = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch.dict(os.environ, {'SIMON_PACKET':str(root/'packet.json')}), patch.dict(sys.modules, {'native_tool':native}), patch('subprocess.check_output', return_value='head\n'):
+                    for excluded, expected in ((None, 'changes_required'), (1, 'pass')):
+                        if excluded is not None:
+                            analysis['excluded_count'] = excluded
+                        (root/'analysis.json').write_text(json.dumps(analysis))
+                        out = io.StringIO()
+                        with contextlib.redirect_stdout(out):
+                            runpy.run_path(str(HERE/'correction/review.py'), run_name='__main__')
+                        result = json.loads(out.getvalue())
+                        self.assertEqual(result['outcome'], expected)
+                        if excluded is None:
+                            self.assertIn('excluded_count', result['report'])
+            finally:
+                os.chdir(old)
 
 
 if __name__ == '__main__':

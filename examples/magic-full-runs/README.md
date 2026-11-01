@@ -16,3 +16,12 @@ simon-says status /absolute/new-run
 ```
 
 The preparation clones the clean isolated input and commits frozen configuration, instructions, role profiles, schemas, native helper and verifier. Its game count and run identity are fixed before execution. The included tests use fake verifier results and temporary files; they launch neither providers nor games.
+
+A separate controlled correction exercise reuses an existing run's retained evidence without launching games. Its initial Analyzer is intentionally instructed to omit `excluded_count`; the mechanical Reviewer requires that valid audit field, provides exact feedback, and the controller should route one correction. This induced omission is a test condition, not a claim of a model or domain defect. Original issues may be supplemented but not removed or altered. Evidence hashes and the exact accepted source checkpoint are bound before starting, and the new draft also stops at approval.
+
+```sh
+python3 -B examples/magic-full-runs/correction/prepare.py /absolute/source-project /absolute/run-awaiting-approval /absolute/new-project
+SIMON_MAGIC_RUNTIME_ROOT=/absolute/isolated/runtime \
+  simon-says run /absolute/new-project/workflow.toml --project /absolute/new-project \
+  --run-dir /absolute/correction-run --context /absolute/new-project/original-task.txt
+```
