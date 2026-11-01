@@ -35,7 +35,7 @@ This file deliberately distinguishes **decided direction** from **proposals requ
 
 ### 6. Stage graphs and conditional branching
 
-**Recommendation:** named stages with one `on_pass` successor and built-in bounded correction/unblock loops for v0. An arbitrary graph executor, dynamic branches, or conditional expressions should need a demonstrated use case before inclusion.
+**Resolved by user direction and [ADR-0006](../decisions/0006-workflow-defined-role-routing.md):** support workflow-declared route labels selected by the Reviewer and bounded cycles. Arbitrary condition expressions and parallel graph execution remain out of scope.
 
 ### 7. Acceptance without an AI Reviewer
 

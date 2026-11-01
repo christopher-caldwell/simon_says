@@ -66,18 +66,18 @@ This example assumes a command adapter that returns the standard action envelope
 
 ## Stage semantics
 
-V0 supports unique named stages and a single explicit `on_pass` destination (another stage or reserved `complete`). It also has *built-in bounded* `changes_required → same Worker` and `blocked → Unblocker → originating gate` routes. A stop is represented by durable run status, not a guessed route. Full arbitrary condition expressions, nested graphs, parallel branches, and non-review backedges are deferred.
+V0 supports unique named stages and an explicit `on_pass` destination (another stage or reserved `complete`). A stage may also declare route labels mapped to destinations; a passing Reviewer selects a declared label and the controller resolves it. Named routes or cycles require a finite `max_stage_transitions`. Built-in bounded `changes_required → same Worker` and `blocked → Unblocker → originating gate` routes remain separate. A stop is represented by durable run status, not a guessed route. Arbitrary condition expressions, nested graphs and parallel branches remain out of scope. See [ADR-0006](../decisions/0006-workflow-defined-role-routing.md).
 
 Reviewer defaults to an explicit named role. A deterministic verifier may replace the Reviewer when its exit/result protocol is documented; omitting a Reviewer without declaring a verifier is invalid. All stages have a mechanical output check whether or not they have an AI Reviewer.
 
-The core role semantics are fixed in v0 (`worker`, `reviewer`, `unblocker`), while the roles' *names, profiles, models, and assignments* are template-defined. This is intentional to prove reuse without a generalized role language.
+The action protocol has three fixed gate types (`worker`, `reviewer`, `unblocker`); these are not a fixed catalog of domain roles. Each workflow defines its own named roles, profiles, models, and stage assignments. A named role such as a simulator, investigator, or fixer can be assigned to a stage, and declared routes determine which stage runs next.
 
 ## Preflight validation
 
 Reject before launch:
 
 - Invalid schema version, unknown mandatory keys, duplicate stage/role names, invalid identifiers.
-- Missing entry stage; unknown targets; unreachable or non-terminating pass paths; forbidden cycles beyond supported recovery loops.
+- Missing entry stage; unknown targets; unreachable stages; no route to completion; unbounded conditional routes or cycles.
 - Missing instructions, profiles, schema files, or declared starting inputs.
 - A reference escaping the workflow/template/run root, untrusted symlinks in authoritative paths, or absolute paths when the policy requires relative paths.
 - Unsupported provider/model/effort combination where the adapter can detect it; other provider failures are reported at invocation.
@@ -97,14 +97,14 @@ For opaque or non-JSON outputs, the template must specify the mechanical checks 
 | --- | --- | --- |
 | Worker | `complete` | Validate candidate, then Review/verify |
 | Worker | `blocked` | Invoke bounded Unblocker |
-| Reviewer | `pass` | Accept stage; follow template `on_pass` |
+| Reviewer | `pass` | Accept stage; follow `on_pass` or the declared label selected by the Reviewer |
 | Reviewer | `changes_required` | Same stage Worker with feedback |
 | Reviewer | `blocked` | Invoke bounded Unblocker |
 | Unblocker | `retry` | Requeue originating gate with context |
 | Unblocker | `blocked` | Durable stop |
 | Any | malformed/protocol error | Durable reset-required stop |
 
-No arbitrary “next_stage” field in an agent result. The model may draft the `on_pass` route at *authoring time*; agents operating a run cannot change it.
+No arbitrary “next_stage” field in an agent result. A passing Reviewer may select a route label declared at authoring time; it cannot supply a destination or change the frozen map.
 
 ## Template version identity
 

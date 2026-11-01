@@ -12,7 +12,7 @@ The journal and action logs aid inspection. **The durable state record and froze
 
 ```text
 Worker --complete--> mechanical checks --> Reviewer/verification
-   |                                         |  pass --> accept stage --> on_pass
+   |                                         |  pass --> accept stage --> declared route
    |                                         |  changes_required --> Worker (same stage)
    |                                         `- blocked --> Unblocker
    `- blocked --> Unblocker -- retry --> original gate

@@ -25,7 +25,11 @@
 | Command Worker | Produces envelope and candidate Git commit satisfying same protocol |
 | Agent Worker | Uses exact configured adapter/model/effort/profile and records receipt |
 | Reviewer starts | Inspects exact submitted commit in clean detached review environment |
-| Reviewer pass | Accepts stage and follows declared `on_pass` |
+| Reviewer pass | Accepts stage and follows declared `on_pass` or the reviewed declared route label |
+| Reported issue dispatches an authored role | A reviewed issue selects a frozen route to the configured repair role; the accepted repair can route back to verification without Rust domain logic |
+| Conditional route invalid or missing | Fail closed; never dispatch an undeclared destination |
+| Workflow transition budget exhausted | Stop durably before dispatching additional work; reset cannot extend the limit |
+| Routed approval | Persist the reviewed route through restart and reject altered route or review evidence |
 | Reviewer requests changes | Same-stage Worker gets original contract, exact feedback, and candidate lineage |
 | Reviewer repeats changes past configured limit | Durable bounded stop with inspectable evidence |
 | Reviewer wrong inspected commit | Fail closed; no stage advancement |
