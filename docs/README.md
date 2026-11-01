@@ -1,6 +1,6 @@
 # Documentation guide
 
-This repository contains the **design and build plan** for a proposed generic workflow runner. It does not contain runtime code. Source-of-truth rules:
+This repository contains the design and a partial implementation of a generic workflow runner. The CLI currently validates and snapshots definitions; execution is not implemented. See [implementation status](implementation/status.md). Source-of-truth rules:
 
 1. [Vision](vision.md) describes the problem and intended outcome.
 2. [Scope](scope.md) contains the normative v0 requirements and exclusions.

@@ -1,0 +1,1 @@
+{"type":"object","required":["errors"],"properties":{"errors":{"type":"array"}}}

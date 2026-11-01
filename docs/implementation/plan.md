@@ -1,6 +1,6 @@
 # V0 implementation plan
 
-**Implementation status: not started.** This plan is sequenced to preserve the working Orchestrate Build product while proving the generic engine on a real Magic simulation pipeline.
+**Implementation status: partial; see [status](status.md).** This plan is sequenced to preserve the working Orchestrate Build product while proving the generic engine on a real Magic simulation pipeline.
 
 ## Stage 0 — Baseline and characterization
 

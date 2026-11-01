@@ -1,0 +1,38 @@
+schema_version = 1
+name = "data-report"
+start = "validate"
+
+[roles.worker]
+kind = "command"
+argv = ["./worker"]
+
+[roles.reviewer]
+kind = "agent"
+adapter = "codex"
+profile = "reviewer.md"
+
+[roles.unblocker]
+kind = "agent"
+adapter = "claude"
+profile = "unblocker.md"
+
+[stages.validate]
+worker = "worker"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "validate.md"
+inputs = ["data/input.json"]
+outputs = ["reports/validation.json"]
+output_schema = "report.schema.json"
+on_pass = "report"
+max_review_cycles = 3
+
+[stages.report]
+worker = "worker"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "report.md"
+inputs = ["reports/validation.json"]
+outputs = ["reports/report.md"]
+on_pass = "complete"
+max_review_cycles = 3
