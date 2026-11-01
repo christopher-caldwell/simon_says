@@ -1,0 +1,32 @@
+schema_version = 1
+name = "native-magic-diagnostic"
+start = "simulate"
+[roles.worker]
+kind = "command"
+argv = ["python3", "action.py"]
+[roles.reviewer]
+kind = "command"
+argv = ["python3", "action.py"]
+[roles.unblocker]
+kind = "command"
+argv = ["python3", "action.py"]
+[stages.simulate]
+worker = "worker"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "simulate.md"
+inputs = ["diagnostic.json", "decks/angels/checkpoint_2/deck_list.csv", "decks/angels/checkpoint_2/GUIDE.md", "decks/miirym/checkpoint_2/deck_list.csv", "decks/miirym/checkpoint_2/GUIDE.md", "decks/azula/checkpoint_1/deck_list.csv", "decks/azula/checkpoint_1/GUIDE.md", "decks/aang/checkpoint_1/deck_list.csv", "decks/aang/checkpoint_1/GUIDE.md"]
+outputs = ["simulation.json"]
+output_schema = "simulation.schema.json"
+on_pass = "analyze"
+max_review_cycles = 3
+[stages.analyze]
+worker = "worker"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "analyze.md"
+inputs = ["simulation.json"]
+outputs = ["analysis.json"]
+output_schema = "analysis.schema.json"
+on_pass = "complete"
+max_review_cycles = 3

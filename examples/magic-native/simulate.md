@@ -1,0 +1,1 @@
+Execute one isolated native diagnostic game; save the native run identity and eligible-game count. The reviewer independently invokes the native verification command. This is not a measurement study or deck-quality conclusion.

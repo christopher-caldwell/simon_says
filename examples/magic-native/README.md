@@ -1,0 +1,18 @@
+# Native Magic diagnostic workflow
+
+This example calls the existing `collection_plan` native Manabrew simulator, not a substitute simulation. It requires a locally copied simulator source, runtime receipt, executable, card archive, and the four referenced deck CSV/GUIDE pairs. These files are intentionally not distributed in this repository. It runs two one-game diagnostics: the first is rejected by the reviewer to exercise correction, and the second is verified and accepted. An initial controlled block exercises Unblocker retry. Both simulations use one worker, a 30-second engine budget, a 40-second per-game wall limit and a 60-second collection budget. A run may be excluded or fail on another environment; the fixture stops instead of claiming success.
+
+Set `SIMON_MAGIC_RUNTIME_ROOT` to an absolute isolated directory containing `repo/sim/playtest`, its `repo/sim/manabrew` Python package, and `store/runtime.json`. That receipt's binary/archive paths must refer to the copied runtime and its immutable data. The workflow project itself needs these tracked inputs: the four `deck_list.csv` and `GUIDE.md` files declared in `workflow.toml`. Copy this example and those eight files into a new Git repository, commit them, then use `simon-says run workflow.toml --project . --run-dir /absolute/new/run-dir` with `SIMON_MAGIC_RUNTIME_ROOT` exported. The native stores are written beneath each Simon Says action directory, outside the Git worktree. An interrupted or repeated action can create additional games and data; Git reset cannot undo them. Do not point this fixture at a shared or production store.
+
+The worker commits compact simulation/analysis JSON artifacts. The reviewer invokes the native simulator's `verify` command against the external action store and requires one eligible verified game, then reviews the summary. This tests invocation and provenance, not scientific independence or game-rule correctness. A one-game diagnostic cannot support deck-quality conclusions, and native rules are not certified.
+
+An optional integration test is available after preparing the isolated runtime tree above and placing the four input trees under its `repo/decks`: `SIMON_MAGIC_RUNTIME_ROOT=/absolute/isolated/root cargo test --test native_magic -- --ignored --nocapture`. It launches two real games and may require 90 seconds. The normal automated suite does not silently launch a simulator.
+
+To prepare the isolated runtime directly from a local `collection_plan` checkout with an installed native runtime:
+
+```sh
+python3 examples/magic-native/prepare_isolated.py /absolute/path/to/collection_plan /absolute/path/to/new-isolated-runtime
+SIMON_MAGIC_RUNTIME_ROOT=/absolute/path/to/new-isolated-runtime cargo test --test native_magic -- --ignored --nocapture
+```
+
+The first command creates a new directory, copies the current simulator code, selected deck inputs, executable and card archive, and rewrites the copied runtime selection to those copied objects. It reads the source checkout as it exists, including its uncommitted changes, and refuses an existing destination. The copied receipt can retain historical paths in its optional gate-evidence metadata; the fixture verifies the copied binary/archive hashes and game evidence, not the copied runtime's complete build provenance.
