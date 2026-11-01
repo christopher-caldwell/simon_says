@@ -58,8 +58,8 @@ def review_stage(stage, packet):
             errors.append("set original_question exactly to packet.run_context")
         if analysis["verified_games"] != collection["eligible"]:
             errors.append("set verified_games to collection.eligible (eligible games, not verified attempts)")
-        if analysis["issues"] != collection["issues"]:
-            errors.append("set issues exactly to collection.issues; put supplemental detail in answer or limitations")
+        if any(issue not in analysis["issues"] for issue in collection["issues"]):
+            errors.append("include every issue object from collection.issues exactly; additional issue objects are allowed")
         if errors:
             raise ChangesRequired("; ".join(errors))
         report = "Mechanically checked original question, verified count and issues; this check does not certify the Analyzer's judgment."

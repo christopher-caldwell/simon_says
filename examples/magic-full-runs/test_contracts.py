@@ -76,6 +76,20 @@ class Contracts(unittest.TestCase):
 
 
 class ReviewFeedback(unittest.TestCase):
+    def test_extra_findings_pass_while_original_issues_are_preserved(self):
+        spec = importlib.util.spec_from_file_location('full_review_extra', HERE/'review.py')
+        review = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(review)
+        original = {'kind': 'exclusion', 'details': {'unsupported_engine_behavior': 1}}
+        analysis = {'original_question':'question', 'verified_games':3, 'issues':[original, {'kind':'new_finding'}]}
+        values = {'analysis.json': analysis, 'collection.json': {'eligible':3, 'issues':[original]}}
+        with patch.object(review, 'load', side_effect=lambda path: values[path]):
+            self.assertIn('Mechanically checked', review.review_stage('analyze', {'run_context':'question'}))
+            for bad in ([], [{'kind':'exclusion', 'details':{'unsupported_engine_behavior':0}}]):
+                analysis['issues'] = bad
+                with self.assertRaises(review.ChangesRequired):
+                    review.review_stage('analyze', {'run_context':'question'})
+
     def test_feedback_identifies_each_repair(self):
         spec = importlib.util.spec_from_file_location('full_review', HERE/'review.py')
         review = importlib.util.module_from_spec(spec)
