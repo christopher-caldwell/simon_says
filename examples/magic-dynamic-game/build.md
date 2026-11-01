@@ -1,0 +1,1 @@
+Build the exact reviewed Fixer source checkpoint into an isolated candidate runtime using the frozen native tooling and archive. Run its maintained source, release integration and archived gates; record the immutable runtime receipt and object hashes. Do not install the runtime, modify production, launch games or replay uncertain actions.

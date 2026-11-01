@@ -1,0 +1,62 @@
+schema_version = 1
+name = "magic-native-game-dynamic-repair"
+purpose = "Run an isolated native Magic game batch; route the independently observed scoped engine issue to the configured Fixer, rebuild its accepted commit and run a fresh batch."
+start = "simulate"
+max_stage_transitions = 7
+frozen_project_files = ["workflow.toml", "simon-game/native.py", "simon-game/game.py", "simon-game/build.py", "simon-game/review.py", "simon-game/probe.py", "simon-game/stop.py", "simon-game/ps_compat.py", "simon-game/simulate.md", "simon-game/repair.md", "simon-game/build.md", "simon-game/game.schema.json", "simon-game/repair.schema.json", "simon-game/runtime.schema.json", "simon-game/assets.json", "simon-game/game-config.json", "simon-repair/profile.md", "manabrew-rs/crates/manabrew-engine/tests/left_battlefield_this_turn.rs", "manabrew-rs/crates/manabrew-engine/tests/bottom_departure.rs", "manabrew-rs/crates/manabrew-engine/tests/prevented_zone_move.rs", "decks/angels/checkpoint_2/deck_list.csv", "decks/angels/checkpoint_2/GUIDE.md", "decks/miirym/checkpoint_2/deck_list.csv", "decks/miirym/checkpoint_2/GUIDE.md", "decks/azula/checkpoint_1/deck_list.csv", "decks/azula/checkpoint_1/GUIDE.md", "decks/aang/checkpoint_1/deck_list.csv", "decks/aang/checkpoint_1/GUIDE.md"]
+[roles.simulator]
+kind = "command"
+argv = ["python3", "-B", "simon-game/game.py"]
+timeout_seconds = 1800
+[roles.fixer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-terra"
+effort = "high"
+profile = "simon-repair/profile.md"
+timeout_seconds = 1800
+[roles.builder]
+kind = "command"
+argv = ["python3", "-B", "simon-game/build.py"]
+timeout_seconds = 7200
+[roles.verifier]
+kind = "command"
+argv = ["python3", "-B", "simon-game/review.py"]
+timeout_seconds = 1800
+[roles.stop]
+kind = "command"
+argv = ["python3", "-B", "simon-game/stop.py"]
+timeout_seconds = 30
+[stages.simulate]
+worker = "simulator"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-game/simulate.md"
+inputs = ["simon-game/assets.json", "simon-game/game-config.json", "decks/angels/checkpoint_2/deck_list.csv", "decks/angels/checkpoint_2/GUIDE.md", "decks/miirym/checkpoint_2/deck_list.csv", "decks/miirym/checkpoint_2/GUIDE.md", "decks/azula/checkpoint_1/deck_list.csv", "decks/azula/checkpoint_1/GUIDE.md", "decks/aang/checkpoint_1/deck_list.csv", "decks/aang/checkpoint_1/GUIDE.md"]
+outputs = ["game.json"]
+output_schema = "simon-game/game.schema.json"
+on_pass = "complete"
+max_review_cycles = 2
+[stages.simulate.routes]
+issues = "repair"
+clean = "complete"
+[stages.repair]
+worker = "fixer"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-game/repair.md"
+inputs = ["game.json"]
+outputs = ["repair.json"]
+output_schema = "simon-game/repair.schema.json"
+on_pass = "build"
+max_review_cycles = 2
+[stages.build]
+worker = "builder"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-game/build.md"
+inputs = ["repair.json", "simon-game/assets.json"]
+outputs = ["native-runtime.json"]
+output_schema = "simon-game/runtime.schema.json"
+on_pass = "simulate"
+max_review_cycles = 2
