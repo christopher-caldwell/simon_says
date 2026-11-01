@@ -51,6 +51,101 @@ fn command_failure_is_returned_without_guessing_success() {
     assert_eq!(out.exit_code, Some(17));
 }
 #[test]
+fn native_terminal_error_cannot_be_accepted_on_zero_exit() {
+    for (adapter, terminal) in [
+        (
+            "codex",
+            r#"{"type":"turn.failed","error":{"message":"failed"}}"#,
+        ),
+        (
+            "claude",
+            r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"failed"}"#,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake.py");
+        fs::write(&script, format!("print('{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"candidate\"}}}}')\nprint({terminal:?})\n")).unwrap();
+        let mut role = role("command", None);
+        role.argv = vec!["python3".into(), script.to_string_lossy().into()];
+        let mut plan = prepare(
+            &role,
+            Gate::Worker,
+            "",
+            dir.path(),
+            &dir.path().join("packet"),
+        )
+        .unwrap();
+        plan.adapter = adapter.into();
+        assert!(
+            invoke(&plan, dir.path()).is_err(),
+            "{adapter} terminal failure accepted"
+        );
+    }
+}
+#[test]
+fn recoverable_native_warning_does_not_override_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake.py");
+    fs::write(&script, "print('{\"type\":\"error\",\"message\":\"temporary warning\"}')\nprint('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"done\"}}')\nprint('{\"type\":\"turn.completed\"}')\n").unwrap();
+    let mut role = role("command", None);
+    role.argv = vec!["python3".into(), script.to_string_lossy().into()];
+    let mut plan = prepare(
+        &role,
+        Gate::Worker,
+        "",
+        dir.path(),
+        &dir.path().join("packet"),
+    )
+    .unwrap();
+    plan.adapter = "codex".into();
+    let outcome = invoke(&plan, dir.path()).unwrap();
+    assert!(outcome.success);
+    assert_eq!(outcome.response.as_deref(), Some("done"));
+}
+#[test]
+fn incomplete_native_stream_cannot_be_accepted_on_zero_exit() {
+    for adapter in ["codex", "claude"] {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake.py");
+        fs::write(&script, "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"candidate\"}}')\n").unwrap();
+        let mut role = role("command", None);
+        role.argv = vec!["python3".into(), script.to_string_lossy().into()];
+        let mut plan = prepare(
+            &role,
+            Gate::Worker,
+            "",
+            dir.path(),
+            &dir.path().join("packet"),
+        )
+        .unwrap();
+        plan.adapter = adapter.into();
+        assert!(
+            invoke(&plan, dir.path()).is_err(),
+            "{adapter} incomplete stream accepted"
+        );
+    }
+}
+#[test]
+fn claude_success_result_is_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake.py");
+    fs::write(&script, "print('{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"done\"}')\n").unwrap();
+    let mut role = role("command", None);
+    role.argv = vec!["python3".into(), script.to_string_lossy().into()];
+    let mut plan = prepare(
+        &role,
+        Gate::Worker,
+        "",
+        dir.path(),
+        &dir.path().join("packet"),
+    )
+    .unwrap();
+    plan.adapter = "claude".into();
+    let outcome = invoke(&plan, dir.path()).unwrap();
+    assert!(outcome.success);
+    assert_eq!(outcome.response.as_deref(), Some("done"));
+}
+#[test]
 fn codex_and_claude_plans_include_exact_model_and_effort() {
     let dir = tempfile::tempdir().unwrap();
     let packet = dir.path().join("packet");

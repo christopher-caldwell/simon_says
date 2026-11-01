@@ -28,6 +28,7 @@ if not (worker and os.environ.get('FAKE_NO_SESSION') == '1' and not p['feedback'
 if worker and os.environ.get('FAKE_BLOCK') == '1' and not p['feedback']:
     response = {'action_id': p['action_id'], 'outcome': 'blocked', 'report':'blocked once', 'candidate_commit':None, 'inspected_commit':None}
     print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(response)}}))
+    print(json.dumps({'type':'turn.completed'}))
     raise SystemExit(0)
 if worker:
     output = 'one.json' if p['stage'] == 'first' else 'two.json'
@@ -49,6 +50,10 @@ else:
         response['outcome'] = 'pass'
         response['route'] = 'again' if first_round else 'next'
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(response)}}))
+if os.environ.get('FAKE_TERMINAL_FAILURE') == '1':
+    print(json.dumps({'type':'turn.failed','error':{'message':'fixture failure'}}))
+elif os.environ.get('FAKE_MISSING_TERMINAL') != '1':
+    print(json.dumps({'type':'turn.completed'}))
 "##;
 
 fn git(repo: &Path, args: &[&str]) {
@@ -154,6 +159,56 @@ fn plan(run: &Path, n: usize) -> Value {
         &fs::read(run.join(format!("actions/action-{n}/invocation.json"))).unwrap(),
     )
     .unwrap()
+}
+
+#[test]
+fn failed_native_turn_never_dispatches_reviewer_or_replays() {
+    let (_temp, repo, run_dir, path) = fixture(2, false);
+    let output = Command::new(env!("CARGO_BIN_EXE_simon-says"))
+        .args([
+            "run",
+            repo.join("workflow.toml").to_str().unwrap(),
+            "--project",
+            repo.to_str().unwrap(),
+            "--run-dir",
+            run_dir.to_str().unwrap(),
+        ])
+        .env("PATH", &path)
+        .env("FAKE_TERMINAL_FAILURE", "1")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(state(&run_dir)["state"]["status"], "running");
+    assert!(!run_dir.join("actions/action-1").exists());
+    assert!(!cli(&["resume", run_dir.to_str().unwrap()], &path, false)
+        .status
+        .success());
+    assert!(!run_dir.join("actions/action-1").exists());
+}
+
+#[test]
+fn incomplete_native_turn_never_dispatches_reviewer_or_replays() {
+    let (_temp, repo, run_dir, path) = fixture(2, false);
+    let output = Command::new(env!("CARGO_BIN_EXE_simon-says"))
+        .args([
+            "run",
+            repo.join("workflow.toml").to_str().unwrap(),
+            "--project",
+            repo.to_str().unwrap(),
+            "--run-dir",
+            run_dir.to_str().unwrap(),
+        ])
+        .env("PATH", &path)
+        .env("FAKE_MISSING_TERMINAL", "1")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(state(&run_dir)["state"]["status"], "running");
+    assert!(!run_dir.join("actions/action-1").exists());
+    assert!(!cli(&["resume", run_dir.to_str().unwrap()], &path, false)
+        .status
+        .success());
+    assert!(!run_dir.join("actions/action-1").exists());
 }
 
 #[test]

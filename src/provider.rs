@@ -495,6 +495,16 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
         "action stdout exceeded the 64 MiB limit; action is uncertain"
     );
     let text = String::from_utf8(bytes).context("provider stdout is not UTF-8")?;
+    if plan.adapter != "command" {
+        ensure!(
+            !native_terminal_failure(&text, &plan.adapter),
+            "native provider reported terminal failure; action and external effects remain uncertain"
+        );
+        ensure!(
+            native_terminal_success(&text, &plan.adapter),
+            "native provider omitted a terminal success event; action and external effects remain uncertain"
+        );
+    }
     let (response, session_id) = if plan.adapter == "command" {
         (Some(text), None)
     } else {
@@ -506,6 +516,50 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
         response,
         session_id,
     })
+}
+
+fn native_terminal_success(stdout: &str, adapter: &str) -> bool {
+    let matches = |value: &Value| {
+        let kind = value.get("type").and_then(Value::as_str);
+        match adapter {
+            "codex" => kind == Some("turn.completed"),
+            "claude" => kind == Some("result"),
+            _ => false,
+        }
+    };
+    stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|v| matches(&v))
+        || serde_json::from_str::<Value>(stdout)
+            .ok()
+            .is_some_and(|v| matches(&v))
+}
+
+/// Process exit success alone cannot override an explicit failed native turn.
+/// Only terminal events are considered: progress warnings may be recoverable.
+fn native_terminal_failure(stdout: &str, adapter: &str) -> bool {
+    fn failed(value: &Value, adapter: &str) -> bool {
+        let kind = value.get("type").and_then(Value::as_str);
+        match adapter {
+            "codex" => kind == Some("turn.failed"),
+            "claude" if kind == Some("result") => {
+                value.get("is_error").and_then(Value::as_bool) == Some(true)
+                    || value
+                        .get("subtype")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| s.starts_with("error"))
+            }
+            _ => false,
+        }
+    }
+    stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|v| failed(&v, adapter))
+        || serde_json::from_str::<Value>(stdout)
+            .ok()
+            .is_some_and(|v| failed(&v, adapter))
 }
 
 /// Extract the final native agent message from the transport event stream.
