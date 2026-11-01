@@ -1,0 +1,35 @@
+schema_version = 1
+name = "synthetic-opening-hand"
+start = "simulate"
+
+[roles.worker]
+kind = "command"
+argv = ["python3", "action.py"]
+[roles.reviewer]
+kind = "command"
+argv = ["python3", "action.py"]
+[roles.unblocker]
+kind = "command"
+argv = ["python3", "action.py"]
+
+[stages.simulate]
+worker = "worker"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "simulate.md"
+inputs = ["experiment.json"]
+outputs = ["samples.json"]
+output_schema = "samples.schema.json"
+on_pass = "analyze"
+max_review_cycles = 3
+
+[stages.analyze]
+worker = "worker"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "analyze.md"
+inputs = ["samples.json"]
+outputs = ["analysis.json"]
+output_schema = "analysis.schema.json"
+on_pass = "complete"
+max_review_cycles = 3

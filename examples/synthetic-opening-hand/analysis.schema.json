@@ -1,0 +1,1 @@
+{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":false,"required":["trials","two_to_four_lands","fraction"],"properties":{"trials":{"type":"integer","minimum":1},"two_to_four_lands":{"type":"integer","minimum":0},"fraction":{"type":"number","minimum":0,"maximum":1}}}
