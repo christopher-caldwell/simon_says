@@ -42,6 +42,9 @@ if worker:
     subprocess.run(['git','-c','user.name=Fake','-c','user.email=fake@example.invalid','commit','-qm','candidate'], check=True)
     head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
     response = {'action_id': p['action_id'], 'outcome': 'complete', 'report':'candidate', 'candidate_commit':head, 'inspected_commit':None}
+    if os.environ.get('FAKE_IGNORED') == '1':
+        pathlib.Path('target').mkdir(exist_ok=True)
+        pathlib.Path('target/evidence').write_text('preserve')
 else:
     head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
     first_round = p['stage'] == 'first' and json.loads(pathlib.Path('one.json').read_text())['round'] == 1
@@ -75,6 +78,7 @@ fn fixture(max_reviews: u32, enabled: bool) -> (tempfile::TempDir, PathBuf, Path
     fs::write(&fake, FAKE_CODEX).unwrap();
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(repo.join("input.json"), "{}\n").unwrap();
+    fs::write(repo.join(".gitignore"), "target/\n").unwrap();
     fs::write(repo.join("profile.md"), "Fixture profile\n").unwrap();
     fs::write(repo.join("instructions.md"), "Fixture instructions\n").unwrap();
     fs::write(repo.join("stop.py"), "import json,os\np=json.load(open(os.environ['SIMON_PACKET'])); print(json.dumps({'action_id':p['action_id'],'outcome':'blocked','report':'stop','candidate_commit':None,'inspected_commit':None}))\n").unwrap();
@@ -159,6 +163,96 @@ fn plan(run: &Path, n: usize) -> Value {
         &fs::read(run.join(format!("actions/action-{n}/invocation.json"))).unwrap(),
     )
     .unwrap()
+}
+
+#[test]
+fn completed_codex_worker_can_be_adopted_only_with_intact_prompt_and_output() {
+    for mode in ["current", "tamper", "legacy"] {
+        let (_tmp, repo, run_dir, path) = fixture(2, false);
+        let result = Command::new(env!("CARGO_BIN_EXE_simon-says"))
+            .args([
+                "run",
+                repo.join("workflow.toml").to_str().unwrap(),
+                "--project",
+                repo.to_str().unwrap(),
+                "--run-dir",
+                run_dir.to_str().unwrap(),
+            ])
+            .env("PATH", &path)
+            .env("FAKE_IGNORED", "1")
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let candidate = std::process::Command::new("git")
+            .args([
+                "-C",
+                run_dir.join("worktree").to_str().unwrap(),
+                "rev-parse",
+                "HEAD",
+            ])
+            .output()
+            .unwrap();
+        let candidate = String::from_utf8(candidate.stdout)
+            .unwrap()
+            .trim()
+            .to_owned();
+        fs::rename(
+            run_dir.join("worktree/target"),
+            run_dir.join("actions/action-0/scratch/preserved-target"),
+        )
+        .unwrap();
+        if mode == "tamper" {
+            fs::write(run_dir.join("actions/action-0/prompt.txt"), "forged").unwrap();
+        } else if mode == "legacy" {
+            let action = run_dir.join("actions/action-0");
+            let packet_path = action.join("packet.json");
+            let mut packet: Value =
+                serde_json::from_slice(&fs::read(&packet_path).unwrap()).unwrap();
+            assert!(packet
+                .as_object_mut()
+                .unwrap()
+                .remove("scratch_env")
+                .is_some());
+            fs::write(packet_path, serde_json::to_vec(&packet).unwrap()).unwrap();
+            let invocation_path = action.join("invocation.json");
+            let mut invocation: Value =
+                serde_json::from_slice(&fs::read(&invocation_path).unwrap()).unwrap();
+            let old = invocation["stdin_prompt"].as_str().unwrap();
+            let prefix = old.rsplit_once("Packet: ").unwrap().0;
+            let prompt = format!(
+                "{prefix}Packet: {}",
+                serde_json::to_string(&packet).unwrap()
+            );
+            invocation["stdin_prompt"] = Value::String(prompt.clone());
+            fs::write(invocation_path, serde_json::to_vec(&invocation).unwrap()).unwrap();
+            fs::write(action.join("prompt.txt"), prompt).unwrap();
+        }
+        let output = cli(
+            &[
+                "adopt-worker",
+                run_dir.to_str().unwrap(),
+                "--expected-action",
+                "action-0",
+                "--expected-candidate",
+                &candidate,
+                "--acknowledge-external-effects",
+            ],
+            &path,
+            false,
+        );
+        assert_eq!(
+            output.status.success(),
+            mode != "tamper",
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if mode == "tamper" {
+            assert_eq!(state(&run_dir)["state"]["status"], "adoption_checking");
+        } else {
+            assert_eq!(state(&run_dir)["state"]["gate"], "reviewer");
+        }
+        assert!(!run_dir.join("actions/action-1").exists());
+    }
 }
 
 #[test]

@@ -632,6 +632,7 @@ pub mod provider;
 
 pub mod git;
 
+pub mod adopt_worker;
 pub mod controller;
 
 pub mod cleanup;

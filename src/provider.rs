@@ -70,6 +70,47 @@ pub struct InvocationOutcome {
     pub session_id: Option<String>,
 }
 
+/// Recheck a durable successful outcome against its original captured stream.
+/// This is used only for explicit recovery; it never invokes the provider.
+pub(crate) fn validate_recorded_outcome(
+    plan: &InvocationPlan,
+    stdout: &str,
+    outcome: &InvocationOutcome,
+) -> Result<()> {
+    ensure!(
+        outcome.success && outcome.exit_code == Some(0),
+        "recorded provider outcome did not succeed"
+    );
+    let (response, session) = if plan.adapter == "command" {
+        (Some(stdout.to_owned()), None)
+    } else {
+        ensure!(
+            native_valid_framing(stdout, &plan.adapter),
+            "recorded native output has malformed framing"
+        );
+        ensure!(
+            !native_terminal_failure(stdout, &plan.adapter)
+                && native_terminal_success(stdout, &plan.adapter),
+            "recorded native output lacks a successful completed turn"
+        );
+        (
+            extract_native_text(stdout, &plan.adapter),
+            extract_response(stdout).1,
+        )
+    };
+    ensure!(
+        response.is_some() && response == outcome.response && session == outcome.session_id,
+        "recorded outcome differs from captured provider output"
+    );
+    if let (Some(expected), Some(observed)) = (&plan.session_in, &session) {
+        ensure!(
+            expected == observed,
+            "recorded resumed session differs from observed session"
+        );
+    }
+    Ok(())
+}
+
 /// Adapter-controlled flags cannot be replaced through the template's native arguments.
 pub fn validate_native_args(adapter: &str, args: &[String]) -> Result<()> {
     let owned: &[&str] = match adapter {

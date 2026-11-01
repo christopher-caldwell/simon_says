@@ -20,6 +20,7 @@ pub enum Status {
     Stopped,
     AwaitingApproval,
     ApprovalChecking,
+    AdoptionChecking,
     Complete,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

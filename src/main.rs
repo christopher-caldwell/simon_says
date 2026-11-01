@@ -74,6 +74,20 @@ enum Command {
         #[arg(long)]
         acknowledge_external_effects: bool,
     },
+    /// Adopt a recorded completed Worker after safely reconciling its checkout, then inspect before resuming.
+    AdoptWorker {
+        run_dir: PathBuf,
+        #[arg(long)]
+        expected_action: String,
+        #[arg(long)]
+        expected_candidate: String,
+        /// Confirm processes have exited and external effects have been reconciled.
+        #[arg(long)]
+        acknowledge_external_effects: bool,
+        /// Explicitly repeat a previously interrupted or failed adoption check after reconciliation.
+        #[arg(long)]
+        reconcile_check: bool,
+    },
 }
 fn print_result(record: simon_says::store::RunRecord) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&record)?);
@@ -161,6 +175,22 @@ fn main() -> Result<()> {
         } => {
             controller::reset(&run_dir, acknowledge_external_effects)?;
             println!("reset to recorded checkpoint; inspect status before resuming");
+        }
+        Command::AdoptWorker {
+            run_dir,
+            expected_action,
+            expected_candidate,
+            acknowledge_external_effects,
+            reconcile_check,
+        } => {
+            let record = simon_says::adopt_worker::adopt(
+                &run_dir,
+                &expected_action,
+                &expected_candidate,
+                acknowledge_external_effects,
+                reconcile_check,
+            )?;
+            print_result(record)?;
         }
     }
     Ok(())

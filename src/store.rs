@@ -234,6 +234,7 @@ impl RunStore {
             Status::Stopped => bail!("run stopped: {}; explicit recovery is required", record.state.stop_reason.as_deref().unwrap_or("unspecified")),
             Status::AwaitingApproval => bail!("run awaits explicit approval of its recorded accepted checkpoint and workflow digest"),
             Status::ApprovalChecking => bail!("approval verification is uncertain; explicit reset is required before reapproval"),
+            Status::AdoptionChecking => bail!("Worker adoption verification is uncertain; reconcile processes and external effects and explicitly retry adoption with --reconcile-check"),
             Status::Complete => bail!("run is already complete"),
             Status::Ready => Ok(()),
         }
