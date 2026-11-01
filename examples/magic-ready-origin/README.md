@@ -12,3 +12,7 @@ python3 -B examples/magic-ready-origin/prepare.py /absolute/prepared-game-projec
 simon-says validate /absolute/new/project/workflow.toml
 simon-says run /absolute/new/project/workflow.toml --project /absolute/new/project --run-dir /absolute/new/run --context /absolute/new/project/original-task.txt
 ```
+
+## Probe preflight
+
+A preflight of the pre-refactor probe against retained post-repair game evidence from `../magic-dynamic-game-run-v3` ran in the isolated clone `../magic-origin-probe-check/source` and action-owned scratch. It found the recorded insufficient-context Origin warning in attempt `90042c23f1d24006acb51b46d787aad8`, sequence 831, trace SHA-256 `2672bb036d90abedfc935f283c37a34d5fab94a76654dbac506187afc4644910`; the independent actual-archive control reproduced its expected one-fail/two-pass result. The JSON output is `../magic-origin-probe-check/result.json` and control log under that scratch. This establishes the observation and independently reproduced defect, not that the defect caused that particular warning. The current fixture's no-provider tests cover the refactored classifier and reviewed-route constraints. It has not yet demonstrated a full live Origin follow-up run.
