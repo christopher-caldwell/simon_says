@@ -508,7 +508,10 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
     let (response, session_id) = if plan.adapter == "command" {
         (Some(text), None)
     } else {
-        extract_response(&text)
+        (
+            extract_native_text(&text, &plan.adapter),
+            extract_response(&text).1,
+        )
     };
     Ok(InvocationOutcome {
         success: status.success(),
@@ -518,19 +521,66 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
     })
 }
 
+fn extract_native_text(stdout: &str, adapter: &str) -> Option<String> {
+    let allowed = |value: &Value| match adapter {
+        "codex" => {
+            value.get("type").and_then(Value::as_str) == Some("item.completed")
+                && value
+                    .get("item")
+                    .and_then(|v| v.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("agent_message")
+        }
+        "claude" => {
+            value.get("type").and_then(Value::as_str) == Some("result")
+                && value.get("subtype").and_then(Value::as_str) == Some("success")
+                && value.get("is_error").and_then(Value::as_bool) == Some(false)
+        }
+        _ => false,
+    };
+    let mut response = None;
+    for value in stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    {
+        if allowed(&value) {
+            response = final_text(&value);
+        }
+    }
+    response.or_else(|| {
+        serde_json::from_str::<Value>(stdout)
+            .ok()
+            .filter(&allowed)
+            .and_then(|v| final_text(&v))
+    })
+}
+
 fn native_terminal_success(stdout: &str, adapter: &str) -> bool {
     let matches = |value: &Value| {
         let kind = value.get("type").and_then(Value::as_str);
         match adapter {
             "codex" => kind == Some("turn.completed"),
-            "claude" => kind == Some("result"),
+            "claude" => {
+                kind == Some("result")
+                    && value.get("subtype").and_then(Value::as_str) == Some("success")
+                    && value.get("is_error").and_then(Value::as_bool) == Some(false)
+            }
             _ => false,
         }
     };
-    stdout
+    let mut terminal_after_response = false;
+    for value in stdout
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .any(|v| matches(&v))
+    {
+        if final_text(&value).is_some() {
+            terminal_after_response = false;
+        }
+        if matches(&value) {
+            terminal_after_response = true;
+        }
+    }
+    terminal_after_response
         || serde_json::from_str::<Value>(stdout)
             .ok()
             .is_some_and(|v| matches(&v))
