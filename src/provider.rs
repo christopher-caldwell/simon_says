@@ -28,6 +28,10 @@ pub struct InvocationPlan {
     pub adapter: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// The exact previously observed Codex session, when a same-stage Worker
+    /// correction opted in to continuation. Never inferred from --last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_in: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
     #[serde(default)]
@@ -119,6 +123,45 @@ pub fn prepare(
     cwd: &Path,
     packet_path: &Path,
 ) -> Result<InvocationPlan> {
+    prepare_with_session(role, gate, prompt, cwd, packet_path, None)
+}
+
+/// Prepare an explicitly opted-in, same-stage Codex Worker continuation.
+/// The caller owns session scope and must never recover a handle after restart.
+pub fn prepare_with_session(
+    role: &Role,
+    gate: Gate,
+    prompt: &str,
+    cwd: &Path,
+    packet_path: &Path,
+    session_in: Option<&str>,
+) -> Result<InvocationPlan> {
+    if role.resume_worker_session {
+        ensure!(
+            role.kind == "agent" && role.adapter.as_deref() == Some("codex"),
+            "resume_worker_session currently requires a Codex agent"
+        );
+        ensure!(
+            !role.args.iter().any(
+                |arg| arg.split_once('=').map_or(arg.as_str(), |(flag, _)| flag) == "--ephemeral"
+            ),
+            "resume_worker_session is incompatible with --ephemeral"
+        );
+    }
+    if let Some(id) = session_in {
+        ensure!(
+            gate == Gate::Worker
+                && role.resume_worker_session
+                && role.kind == "agent"
+                && role.adapter.as_deref() == Some("codex"),
+            "session continuation is permitted only for opted-in Codex Workers"
+        );
+        let parsed = uuid::Uuid::parse_str(id).context("invalid Codex session identity")?;
+        ensure!(
+            parsed.to_string() == id,
+            "Codex session identity must be a canonical UUID"
+        );
+    }
     ensure!(
         (1..=86400).contains(&role.timeout_seconds.unwrap_or_else(default_timeout)),
         "timeout_seconds must be 1..=86400"
@@ -158,6 +201,9 @@ pub fn prepare(
                         "-C".into(),
                         cwd.to_string_lossy().into_owned(),
                     ]);
+                    if let Some(id) = session_in {
+                        argv.extend(["resume".into(), id.to_owned()]);
+                    }
                     if let Some(model) = &role.model {
                         argv.extend(["--model".into(), model.clone()]);
                     }
@@ -235,6 +281,7 @@ pub fn prepare(
         adapter,
         model: role.model.clone(),
         effort: role.effort.clone(),
+        session_in: session_in.map(str::to_owned),
         timeout_seconds: role.timeout_seconds.unwrap_or_else(default_timeout),
         scratch: None,
     })

@@ -11,6 +11,7 @@ fn role(kind: &str, adapter: Option<&str>) -> Role {
         model: None,
         effort: None,
         profile: None,
+        resume_worker_session: false,
         timeout_seconds: None,
         args: vec![],
     }
@@ -267,4 +268,44 @@ fn claude_workers_require_nested_sandbox_probe_without_guessing_policy() {
         &role("command", None),
         Gate::Worker
     ));
+}
+
+#[test]
+fn codex_session_continuation_is_explicit_worker_only_and_identity_bound() {
+    use simon_says::provider::prepare_with_session;
+    let dir = tempfile::tempdir().unwrap();
+    let packet = dir.path().join("packet");
+    let id = "01a198db-e635-7d30-bd63-17dabefeb094";
+    let mut r = role("agent", Some("codex"));
+    r.model = Some("model".into());
+    r.effort = Some("high".into());
+    assert!(
+        prepare_with_session(&r, Gate::Worker, "prompt", dir.path(), &packet, Some(id)).is_err()
+    );
+    r.resume_worker_session = true;
+    let p =
+        prepare_with_session(&r, Gate::Worker, "prompt", dir.path(), &packet, Some(id)).unwrap();
+    assert!(p.argv.windows(2).any(|a| a == ["resume", id]));
+    assert!(p.argv.windows(2).any(|a| a == ["--model", "model"]));
+    assert_eq!(p.argv.last().unwrap(), "-");
+    assert_eq!(p.session_in.as_deref(), Some(id));
+    assert_eq!(p.stdin_prompt.as_deref(), Some("prompt"));
+    assert!(prepare_with_session(&r, Gate::Reviewer, "", dir.path(), &packet, Some(id)).is_err());
+    assert!(prepare_with_session(&r, Gate::Unblocker, "", dir.path(), &packet, Some(id)).is_err());
+    for invalid in [
+        "--last",
+        "not-a-uuid",
+        "01A198DB-E635-7D30-BD63-17DABEFEB094",
+        "01a198db-e635-7d30-bd63-17dabefeb094\n",
+    ] {
+        assert!(
+            prepare_with_session(&r, Gate::Worker, "", dir.path(), &packet, Some(invalid)).is_err(),
+            "{invalid:?}"
+        );
+    }
+    r.args.push("--ephemeral=true".into());
+    assert!(prepare(&r, Gate::Worker, "", dir.path(), &packet).is_err());
+    r.args.clear();
+    r.adapter = Some("claude".into());
+    assert!(prepare(&r, Gate::Worker, "", dir.path(), &packet).is_err());
 }

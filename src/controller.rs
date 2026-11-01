@@ -207,6 +207,10 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
         worktree.run_dir == store.root(),
         "worktree does not belong to run directory"
     );
+    // Like Orchestrate, reuse a Worker session only within this uninterrupted
+    // controller invocation and current stage visit. It is deliberately never
+    // persisted or recovered after a crash, reset, or explicit resume.
+    let mut worker_session: Option<(String, String, String)> = None;
     loop {
         if record.state.status != Status::Ready {
             break;
@@ -266,7 +270,24 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             .join(&action_id)
             .join("packet.json");
         let scratch = store.reserve(&action_id)?;
-        let mut plan = provider::prepare(role, gate, &prompt, cwd, &packet_path)?;
+        let resume_session = if gate == Gate::Worker && role.resume_worker_session {
+            worker_session
+                .as_ref()
+                .and_then(|(stage_name, saved_role, id)| {
+                    (stage_name == &record.state.stage && saved_role == role_name)
+                        .then_some(id.clone())
+                })
+        } else {
+            None
+        };
+        let mut plan = provider::prepare_with_session(
+            role,
+            gate,
+            &prompt,
+            cwd,
+            &packet_path,
+            resume_session.as_deref(),
+        )?;
         let protected = workflow
             .frozen_project_files
             .iter()
@@ -361,8 +382,32 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
         } else {
             worktree.verify_candidate(&checkpoint, &record.state.accepted_commit)?;
         }
+        if let (Some(expected), Some(observed)) =
+            (resume_session.as_deref(), outcome.session_id.as_deref())
+        {
+            ensure!(
+                expected == observed,
+                "resumed Worker reported a different session; action is uncertain"
+            );
+        }
+        let reviewer_pass = gate == Gate::Reviewer && response.outcome == "pass";
         record.state.apply(&workflow, response)?;
         store.save(&record)?;
+        if gate == Gate::Worker {
+            worker_session = if role.resume_worker_session {
+                outcome.session_id.as_deref().and_then(|id| {
+                    uuid::Uuid::parse_str(id)
+                        .ok()
+                        .filter(|parsed| parsed.to_string() == id)
+                        .map(|_| (record.state.stage.clone(), role_name.clone(), id.to_owned()))
+                })
+            } else {
+                None
+            };
+        } else if reviewer_pass {
+            // Even a route back to the same stage is a new stage visit.
+            worker_session = None;
+        }
     }
     Ok(record)
 }

@@ -226,3 +226,34 @@ fn frozen_project_paths_cannot_escape_duplicate_or_be_outputs() {
         assert!(Workflow::parse_and_validate(&bad, d.path()).is_err());
     }
 }
+
+#[test]
+fn session_continuation_is_opt_in_and_valid_only_for_non_ephemeral_codex_agents() {
+    let (d, t) = setup();
+    let allowed = t.replace(
+        "profile = \"reviewer.md\"",
+        "profile = \"reviewer.md\"\nresume_worker_session = true",
+    );
+    Workflow::parse_and_validate(&allowed, d.path()).unwrap();
+    let cases = [
+        t.replace(
+            "argv = [\"./worker\"]",
+            "argv = [\"./worker\"]\nresume_worker_session = true",
+        ),
+        t.replace(
+            "profile = \"unblocker.md\"",
+            "profile = \"unblocker.md\"\nresume_worker_session = true",
+        ),
+        allowed.replace(
+            "resume_worker_session = true",
+            "resume_worker_session = true\nargs = [\"--ephemeral\"]",
+        ),
+        allowed.replace(
+            "resume_worker_session = true",
+            "resume_worker_session = true\nargs = [\"--ephemeral=true\"]",
+        ),
+    ];
+    for bad in cases {
+        assert!(Workflow::parse_and_validate(&bad, d.path()).is_err());
+    }
+}

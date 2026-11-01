@@ -35,6 +35,10 @@ pub struct Role {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub profile: Option<String>,
+    /// Opt in to reusing this Codex Worker session for same-stage corrections
+    /// during one uninterrupted controller invocation.
+    #[serde(default)]
+    pub resume_worker_session: bool,
     /// Per-action wall-clock limit; defaults to 1800 seconds.
     pub timeout_seconds: Option<u64>,
     #[serde(default)]
@@ -157,6 +161,19 @@ impl Workflow {
                 ensure!(
                     (1..=86400).contains(&seconds),
                     "role {name}: timeout_seconds must be 1..=86400"
+                );
+            }
+            if role.resume_worker_session {
+                ensure!(
+                    role.kind == "agent" && role.adapter.as_deref() == Some("codex"),
+                    "role {name}: resume_worker_session currently requires a Codex agent"
+                );
+                ensure!(
+                    !role.args.iter().any(|arg| arg
+                        .split_once('=')
+                        .map_or(arg.as_str(), |(flag, _)| flag)
+                        == "--ephemeral"),
+                    "role {name}: resume_worker_session is incompatible with --ephemeral"
                 );
             }
             match role.kind.as_str() {
