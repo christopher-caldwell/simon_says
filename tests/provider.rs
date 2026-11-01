@@ -202,6 +202,42 @@ fn codex_uses_last_completed_message_before_success() {
     );
 }
 #[test]
+fn subsequent_unfinished_codex_turn_invalidates_prior_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake.py");
+    fs::write(&script, "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"candidate\"}}')\nprint('{\"type\":\"turn.completed\"}')\nprint('{\"type\":\"turn.started\"}')\n").unwrap();
+    let mut role = role("command", None);
+    role.argv = vec!["python3".into(), script.to_string_lossy().into()];
+    let mut plan = prepare(
+        &role,
+        Gate::Worker,
+        "",
+        dir.path(),
+        &dir.path().join("packet"),
+    )
+    .unwrap();
+    plan.adapter = "codex".into();
+    assert!(invoke(&plan, dir.path()).is_err());
+}
+#[test]
+fn later_codex_turn_cannot_reuse_an_earlier_response() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake.py");
+    fs::write(&script, "print('{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"old candidate\"}}')\nprint('{\"type\":\"turn.completed\"}')\nprint('{\"type\":\"turn.started\"}')\nprint('{\"type\":\"turn.completed\"}')\n").unwrap();
+    let mut role = role("command", None);
+    role.argv = vec!["python3".into(), script.to_string_lossy().into()];
+    let mut plan = prepare(
+        &role,
+        Gate::Worker,
+        "",
+        dir.path(),
+        &dir.path().join("packet"),
+    )
+    .unwrap();
+    plan.adapter = "codex".into();
+    assert!(invoke(&plan, dir.path()).unwrap().response.is_none());
+}
+#[test]
 fn claude_success_result_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("fake.py");
@@ -245,6 +281,24 @@ fn claude_result_requires_explicit_success_and_no_error() {
         plan.adapter = "claude".into();
         assert!(invoke(&plan, dir.path()).is_err(), "accepted {event}");
     }
+}
+#[test]
+fn later_claude_cancelled_result_overrides_prior_success_without_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake.py");
+    fs::write(&script, "print('{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"candidate\"}')\nprint('{\"type\":\"result\",\"subtype\":\"cancelled\",\"is_error\":false}')\n").unwrap();
+    let mut role = role("command", None);
+    role.argv = vec!["python3".into(), script.to_string_lossy().into()];
+    let mut plan = prepare(
+        &role,
+        Gate::Worker,
+        "",
+        dir.path(),
+        &dir.path().join("packet"),
+    )
+    .unwrap();
+    plan.adapter = "claude".into();
+    assert!(invoke(&plan, dir.path()).is_err());
 }
 #[test]
 fn codex_and_claude_plans_include_exact_model_and_effort() {

@@ -543,6 +543,9 @@ fn extract_native_text(stdout: &str, adapter: &str) -> Option<String> {
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
     {
+        if adapter == "codex" && value.get("type").and_then(Value::as_str) == Some("turn.started") {
+            response = None;
+        }
         if allowed(&value) {
             response = final_text(&value);
         }
@@ -573,7 +576,10 @@ fn native_terminal_success(stdout: &str, adapter: &str) -> bool {
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
     {
-        if final_text(&value).is_some() {
+        if final_text(&value).is_some()
+            || (adapter == "codex"
+                && value.get("type").and_then(Value::as_str) == Some("turn.started"))
+        {
             terminal_after_response = false;
         }
         if matches(&value) {
@@ -594,11 +600,8 @@ fn native_terminal_failure(stdout: &str, adapter: &str) -> bool {
         match adapter {
             "codex" => kind == Some("turn.failed"),
             "claude" if kind == Some("result") => {
-                value.get("is_error").and_then(Value::as_bool) == Some(true)
-                    || value
-                        .get("subtype")
-                        .and_then(Value::as_str)
-                        .is_some_and(|s| s.starts_with("error"))
+                value.get("is_error").and_then(Value::as_bool) != Some(false)
+                    || value.get("subtype").and_then(Value::as_str) != Some("success")
             }
             _ => false,
         }
