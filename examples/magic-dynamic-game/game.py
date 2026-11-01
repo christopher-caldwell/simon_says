@@ -29,8 +29,8 @@ def classify(phase, quality):
 
 def inventory(analysis):
     quality = analysis['quality']
-    return {'exclusions': quality['exclusionReasons'], 'eligible_warnings': quality['eligibleQualityFlags'],
-            'engine_diagnostics': quality['engineDiagnostics']}
+    return {'exclusions': quality['exclusionReasons'], 'all_warnings': quality['qualityFlags'],
+            'eligible_warnings': quality['eligibleQualityFlags'], 'engine_diagnostics': quality['engineDiagnostics']}
 
 
 def valid_denominators(denom, eligible):

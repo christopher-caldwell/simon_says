@@ -12,7 +12,7 @@ import native
 
 class Classification(unittest.TestCase):
     def quality(self, diagnostics=None, exclusions=None):
-        return {'engineDiagnostics': diagnostics or {}, 'exclusionReasons': exclusions or {}, 'eligibleQualityFlags': {}}
+        return {'engineDiagnostics': diagnostics or {}, 'exclusionReasons': exclusions or {}, 'eligibleQualityFlags': {}, 'qualityFlags': {}}
 
     def test_exact_issue_routes_to_repair(self):
         q = self.quality({game.DIAGNOSTIC: 1}, {'unsupported_engine_behavior': 1})
@@ -32,6 +32,11 @@ class Classification(unittest.TestCase):
     def test_mixed_target_and_other_failures_do_not_route(self):
         self.assertEqual(game.classify('baseline', self.quality({game.DIAGNOSTIC: 1}, {'unsupported_engine_behavior': 1, 'incomplete_lifecycle': 1})), 'unresolved')
         self.assertEqual(game.classify('baseline', self.quality({game.DIAGNOSTIC: 1, 'other': 1})), 'unresolved')
+
+    def test_warning_inventory_includes_excluded_attempts(self):
+        quality = self.quality(); quality['qualityFlags'] = {'engine_warning': 4}; quality['eligibleQualityFlags'] = {'engine_warning': 1}
+        self.assertEqual(game.inventory({'quality': quality})['all_warnings'], {'engine_warning': 4})
+        self.assertEqual(game.inventory({'quality': quality})['eligible_warnings'], {'engine_warning': 1})
 
     def test_pending_or_inconsistent_trial_counts_are_rejected(self):
         denom = {'assignedGames': 10, 'retainedAttempts': 10, 'eligibleGames': 6, 'trialStates': {'accepted': 6, 'excluded': 4}}
