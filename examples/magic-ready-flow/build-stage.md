@@ -1,0 +1,1 @@
+Build the reviewed Fixer source commit with the frozen native setup. Preserve all reviewed inputs. Return the helper's exact Worker envelope. This builds in action-owned scratch and does not install a runtime.

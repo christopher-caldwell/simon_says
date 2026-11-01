@@ -1,0 +1,154 @@
+schema_version = 1
+name = "magic-ready-flow-diagnostic"
+purpose = "Run the configured four-role diagnostic, build the reviewed repair, verify with new games, and independently triage remaining warnings."
+start = "investigate"
+max_stage_transitions = 9
+frozen_project_files = ["workflow.toml", "original-task.txt", "simon-four/investigate.md", "simon-four/supervise.md", "simon-four/analyze.md", "simon-four/fix.md", "simon-four/review.py", "simon-four/verify.py", "simon-four/triage.md", "simon-four/escalate.py", "simon-four/triage.schema.json", "simon-four/verify-stage.md", "simon-four/build-stage.md", "simon-game/runtime.schema.json", "simon-four/design.schema.json", "simon-four/analysis.schema.json", "simon-four/profiles/investigator.md", "simon-four/profiles/supervisor.md", "simon-four/profiles/analyzer.md", "simon-four/profiles/fixer.md", "simon-game/native.py", "simon-game/game.py", "simon-game/build.py", "simon-game/review.py", "simon-game/probe.py", "simon-game/stop.py", "simon-game/ps_compat.py", "simon-game/game.schema.json", "simon-game/repair.schema.json", "simon-game/assets.json", "simon-game/game-config.json", "manabrew-rs/crates/manabrew-engine/tests/left_battlefield_this_turn.rs", "manabrew-rs/crates/manabrew-engine/tests/bottom_departure.rs", "manabrew-rs/crates/manabrew-engine/tests/prevented_zone_move.rs", "decks/angels/checkpoint_2/deck_list.csv", "decks/angels/checkpoint_2/GUIDE.md", "decks/miirym/checkpoint_2/deck_list.csv", "decks/miirym/checkpoint_2/GUIDE.md", "decks/azula/checkpoint_1/deck_list.csv", "decks/azula/checkpoint_1/GUIDE.md", "decks/aang/checkpoint_1/deck_list.csv", "decks/aang/checkpoint_1/GUIDE.md"]
+[roles.investigator]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-terra"
+effort = "xhigh"
+profile = "simon-four/profiles/investigator.md"
+timeout_seconds = 600
+[roles.supervisor]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "high"
+profile = "simon-four/profiles/supervisor.md"
+timeout_seconds = 900
+[roles.analyzer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-sol"
+effort = "high"
+profile = "simon-four/profiles/analyzer.md"
+timeout_seconds = 900
+[roles.fixer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-terra"
+effort = "high"
+profile = "simon-four/profiles/fixer.md"
+timeout_seconds = 1800
+[roles.verifier]
+kind = "command"
+argv = ["python3", "-B", "simon-four/review.py"]
+timeout_seconds = 1800
+[roles.stop]
+kind = "command"
+argv = ["python3", "-B", "simon-game/stop.py"]
+timeout_seconds = 30
+[roles.builder]
+kind = "command"
+argv = ["python3", "-B", "simon-game/build.py"]
+timeout_seconds = 7200
+[roles.escalation]
+kind = "command"
+argv = ["python3", "-B", "simon-four/escalate.py"]
+timeout_seconds = 30
+[roles.simulator]
+kind = "command"
+argv = ["python3", "-B", "simon-game/game.py"]
+timeout_seconds = 1800
+
+[stages.investigate]
+worker = "investigator"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/investigate.md"
+inputs = ["simon-game/game-config.json"]
+outputs = ["design.json"]
+output_schema = "simon-four/design.schema.json"
+on_pass = "supervise"
+max_review_cycles = 2
+[stages.supervise]
+worker = "supervisor"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/supervise.md"
+inputs = ["design.json", "simon-game/game-config.json", "decks/angels/checkpoint_2/deck_list.csv", "decks/angels/checkpoint_2/GUIDE.md", "decks/miirym/checkpoint_2/deck_list.csv", "decks/miirym/checkpoint_2/GUIDE.md", "decks/azula/checkpoint_1/deck_list.csv", "decks/azula/checkpoint_1/GUIDE.md", "decks/aang/checkpoint_1/deck_list.csv", "decks/aang/checkpoint_1/GUIDE.md"]
+protected_inputs = ["design.json"]
+outputs = ["game.json"]
+output_schema = "simon-game/game.schema.json"
+on_pass = "analyze"
+max_review_cycles = 2
+[stages.supervise.routes]
+issues = "analyze"
+clean = "analyze"
+[stages.analyze]
+worker = "analyzer"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/analyze.md"
+inputs = ["design.json", "game.json"]
+protected_inputs = ["design.json", "game.json"]
+outputs = ["analysis.json"]
+output_schema = "simon-four/analysis.schema.json"
+on_pass = "repair"
+max_review_cycles = 2
+[stages.analyze.routes]
+issues = "repair"
+clean = "complete"
+[stages.repair]
+worker = "fixer"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/fix.md"
+inputs = ["analysis.json", "game.json"]
+protected_inputs = ["analysis.json", "game.json"]
+outputs = ["repair.json"]
+output_schema = "simon-game/repair.schema.json"
+on_pass = "build"
+max_review_cycles = 2
+
+[stages.build]
+worker = "builder"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/build-stage.md"
+inputs = ["design.json", "game.json", "analysis.json", "repair.json", "simon-game/assets.json"]
+protected_inputs = ["design.json", "game.json", "analysis.json", "repair.json"]
+outputs = ["native-runtime.json"]
+output_schema = "simon-game/runtime.schema.json"
+on_pass = "simulate"
+max_review_cycles = 2
+
+[stages.simulate]
+worker = "simulator"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/verify-stage.md"
+inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "simon-game/assets.json", "simon-game/game-config.json", "decks/angels/checkpoint_2/deck_list.csv", "decks/angels/checkpoint_2/GUIDE.md", "decks/miirym/checkpoint_2/deck_list.csv", "decks/miirym/checkpoint_2/GUIDE.md", "decks/azula/checkpoint_1/deck_list.csv", "decks/azula/checkpoint_1/GUIDE.md", "decks/aang/checkpoint_1/deck_list.csv", "decks/aang/checkpoint_1/GUIDE.md"]
+protected_inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json"]
+outputs = ["verification.json"]
+output_schema = "simon-game/game.schema.json"
+on_pass = "complete"
+max_review_cycles = 2
+[stages.simulate.routes]
+clean = "complete"
+warnings = "triage"
+
+[stages.triage]
+worker = "analyzer"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/triage.md"
+inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json"]
+protected_inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json"]
+outputs = ["triage.json"]
+output_schema = "simon-four/triage.schema.json"
+on_pass = "escalate"
+max_review_cycles = 2
+
+[stages.escalate]
+worker = "escalation"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/triage.md"
+inputs = ["triage.json"]
+protected_inputs = ["triage.json"]
+outputs = ["escalation-never.json"]
+on_pass = "complete"
+max_review_cycles = 1
