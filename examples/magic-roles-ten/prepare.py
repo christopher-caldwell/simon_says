@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Apply the recorded ten-game diagnostic adaptation to a prepared role project."""
 import argparse
-import base64
 import json
 from pathlib import Path
 import subprocess
@@ -22,7 +21,7 @@ def main():
         raise ValueError('new project must not exist or be inside the prepared project')
     if git('status', '--porcelain=v1', cwd=source):
         raise ValueError('prepared project must have a clean working tree')
-    patch = base64.decodebytes(Path(__file__).resolve().with_name('ten-game.patch.b64').read_bytes())
+    patch = Path(__file__).resolve().with_name('ten-game.patch').read_bytes()
     subprocess.run(['git', 'clone', '--no-hardlinks', '--', str(source), str(target)], check=True)
     subprocess.run(['git', 'apply', '--check', '-'], cwd=target, input=patch, check=True)
     subprocess.run(['git', 'apply', '-'], cwd=target, input=patch, check=True)
