@@ -1,0 +1,34 @@
+schema_version = 1
+name = "magic-fixer-isolated"
+purpose = "Exercise an explicitly requested isolated Fixer repair; never modify the real simulator or backlog."
+start = "repair"
+frozen_project_files = ["workflow.toml", "profile.md", "issue.md", "fix.md", "repair.schema.json", "test_collector.py", "review.py", "unblock.py"]
+
+[roles.fixer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-terra"
+effort = "high"
+profile = "profile.md"
+timeout_seconds = 600
+
+[roles.reviewer]
+kind = "command"
+argv = ["python3", "-B", "review.py"]
+timeout_seconds = 60
+
+[roles.stop]
+kind = "command"
+argv = ["python3", "-B", "unblock.py"]
+timeout_seconds = 30
+
+[stages.repair]
+worker = "fixer"
+reviewer = "reviewer"
+unblocker = "stop"
+instructions = "fix.md"
+inputs = ["issue.md", "collector.py", "test_collector.py"]
+outputs = ["repair.json"]
+output_schema = "repair.schema.json"
+on_pass = "complete"
+max_review_cycles = 2
