@@ -32,6 +32,13 @@ def inventory(analysis):
             'engine_diagnostics': quality['engineDiagnostics']}
 
 
+def valid_denominators(denom, eligible):
+    states = denom['trialStates']
+    return (denom['assignedGames'] == 10 and denom['retainedAttempts'] == 10
+            and denom['eligibleGames'] == eligible and states.get('accepted', 0) == eligible
+            and states.get('excluded', 0) == 10 - eligible and not (set(states) - {'accepted', 'excluded'}))
+
+
 def verify_game(report, cli, env):
     original = Path(report['store']).resolve(strict=True)
     if not original.is_relative_to(action_root()):
@@ -58,8 +65,8 @@ def verify_game(report, cli, env):
     if (result.get('run') != name or result.get('verified') != 10 or result.get('verifiedAttempts') != 10
         or result.get('retainedAttempts') != 10 or result.get('eligibleGames') != report['eligible']
         or result.get('rulesCertified') is not False or analysis['state'] != 'complete'
-        or analysis['run'] != name or denom['assignedGames'] != 10 or denom['retainedAttempts'] != 10
-        or denom['eligibleGames'] != report['eligible'] or analysis['runtimeIdentity'] != report['runtime_id']
+        or analysis['run'] != name or not valid_denominators(denom, report['eligible'])
+        or analysis['runtimeIdentity'] != report['runtime_id']
         or inventory(analysis) != report['issues'] or classify(report['phase'], analysis['quality']) != report['kind']):
         raise ValueError('native result, report, issue inventory or verified denominators do not match')
     return result

@@ -33,6 +33,14 @@ class Classification(unittest.TestCase):
         self.assertEqual(game.classify('baseline', self.quality({game.DIAGNOSTIC: 1}, {'unsupported_engine_behavior': 1, 'incomplete_lifecycle': 1})), 'unresolved')
         self.assertEqual(game.classify('baseline', self.quality({game.DIAGNOSTIC: 1, 'other': 1})), 'unresolved')
 
+    def test_pending_or_inconsistent_trial_counts_are_rejected(self):
+        denom = {'assignedGames': 10, 'retainedAttempts': 10, 'eligibleGames': 6, 'trialStates': {'accepted': 6, 'excluded': 4}}
+        self.assertTrue(game.valid_denominators(denom, 6))
+        denom['trialStates']['pending'] = 1
+        self.assertFalse(game.valid_denominators(denom, 6))
+        del denom['trialStates']['pending']; denom['trialStates']['excluded'] = 3
+        self.assertFalse(game.valid_denominators(denom, 6))
+
     def test_build_source_must_be_exact_reviewed_repair(self):
         packet = {'baseline_commit': 'good', 'last_transition': {'from_stage': 'repair', 'to_stage': 'build', 'reviewed_commit': 'good'}}
         native.require_repair_transition(packet, 'good')
