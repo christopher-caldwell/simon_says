@@ -497,6 +497,10 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
     let text = String::from_utf8(bytes).context("provider stdout is not UTF-8")?;
     if plan.adapter != "command" {
         ensure!(
+            native_valid_framing(&text, &plan.adapter),
+            "native provider returned malformed event framing; action and external effects remain uncertain"
+        );
+        ensure!(
             !native_terminal_failure(&text, &plan.adapter),
             "native provider reported terminal failure; action and external effects remain uncertain"
         );
@@ -519,6 +523,22 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
         response,
         session_id,
     })
+}
+
+fn native_valid_framing(stdout: &str, adapter: &str) -> bool {
+    if adapter == "claude"
+        && serde_json::from_str::<Value>(stdout).is_ok_and(|value| value.is_object())
+    {
+        return true;
+    }
+    let mut count = 0usize;
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        count += 1;
+        if !serde_json::from_str::<Value>(line).is_ok_and(|value| value.is_object()) {
+            return false;
+        }
+    }
+    count > 0
 }
 
 fn extract_native_text(stdout: &str, adapter: &str) -> Option<String> {
@@ -559,37 +579,109 @@ fn extract_native_text(stdout: &str, adapter: &str) -> Option<String> {
 }
 
 fn native_terminal_success(stdout: &str, adapter: &str) -> bool {
-    let matches = |value: &Value| {
+    let mut terminal = false;
+    let mut completed_response = false;
+    let mut turn_open = false;
+    // Bound provider-controlled identities independently of the stdout cap.
+    let mut pending_items = std::collections::HashSet::<String>::new();
+    let mut handle = |value: &Value| {
         let kind = value.get("type").and_then(Value::as_str);
         match adapter {
-            "codex" => kind == Some("turn.completed"),
+            "codex" => match kind {
+                Some("turn.started") => {
+                    if turn_open {
+                        return false;
+                    }
+                    terminal = false;
+                    completed_response = false;
+                    turn_open = true;
+                }
+                Some("item.started" | "item.updated" | "item.completed" | "thread.started")
+                    if terminal =>
+                {
+                    return false
+                }
+                Some("item.started" | "item.updated" | "item.completed") => {
+                    turn_open = true;
+                    let item_id = value
+                        .get("item")
+                        .and_then(|item| item.get("id"))
+                        .and_then(Value::as_str);
+                    if kind == Some("item.started") {
+                        let Some(id) = item_id.filter(|id| !id.is_empty() && id.len() <= 512)
+                        else {
+                            return false;
+                        };
+                        if pending_items.len() >= 4096 || !pending_items.insert(id.to_owned()) {
+                            return false;
+                        }
+                    } else if kind == Some("item.updated") {
+                        if !item_id.is_some_and(|id| pending_items.contains(id)) {
+                            return false;
+                        }
+                    } else if kind == Some("item.completed") {
+                        if let Some(id) = item_id {
+                            pending_items.remove(id);
+                        }
+                    }
+                    if kind == Some("item.completed")
+                        && value
+                            .get("item")
+                            .and_then(|item| item.get("type"))
+                            .and_then(Value::as_str)
+                            == Some("agent_message")
+                        && final_text(value).is_some()
+                    {
+                        completed_response = true;
+                    }
+                }
+                Some("turn.completed") => {
+                    if !turn_open || !completed_response || !pending_items.is_empty() {
+                        return false;
+                    }
+                    terminal = true;
+                    turn_open = false;
+                }
+                Some("error") if terminal => return false,
+                Some("error") => completed_response = false,
+                _ => {}
+            },
             "claude" => {
-                kind == Some("result")
-                    && value.get("subtype").and_then(Value::as_str) == Some("success")
-                    && value.get("is_error").and_then(Value::as_bool) == Some(false)
+                if terminal
+                    && (matches!(kind, Some("assistant" | "user" | "stream_event" | "error"))
+                        || (kind == Some("system")
+                            && value.get("subtype").and_then(Value::as_str) == Some("init")))
+                {
+                    return false;
+                }
+                if kind == Some("result") {
+                    terminal = value.get("subtype").and_then(Value::as_str) == Some("success")
+                        && value.get("is_error").and_then(Value::as_bool) == Some(false)
+                        && final_text(value).is_some();
+                }
             }
-            _ => false,
+            _ => return false,
         }
+        true
     };
-    let mut terminal_after_response = false;
+    let mut seen = false;
     for value in stdout
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
     {
-        if final_text(&value).is_some()
-            || (adapter == "codex"
-                && value.get("type").and_then(Value::as_str) == Some("turn.started"))
-        {
-            terminal_after_response = false;
-        }
-        if matches(&value) {
-            terminal_after_response = true;
+        seen = true;
+        if !handle(&value) {
+            return false;
         }
     }
-    terminal_after_response
-        || serde_json::from_str::<Value>(stdout)
-            .ok()
-            .is_some_and(|v| matches(&v))
+    if !seen {
+        if let Ok(value) = serde_json::from_str::<Value>(stdout) {
+            if !handle(&value) {
+                return false;
+            }
+        }
+    }
+    terminal
 }
 
 /// Process exit success alone cannot override an explicit failed native turn.
