@@ -41,6 +41,67 @@ For a stage with `routes`, `on_pass` remains required and must match a declared 
 
 Pass an issue report as a tracked, schema-validated output of the observation stage and declare it as an input to the repair stage. To keep a previous reviewed artifact unchanged while a stage edits other files, also declare it in that stage's `protected_inputs = ["issue.json"]`. Every protected path must appear in `inputs`, must not appear in `outputs`, and must be a regular tracked file at the stage's starting checkpoint. The action guard denies direct writes and ancestor replacement, and the controller compares the candidate's Git blob and mode against that checkpoint before review. Unlisted inputs remain editable, which allows a repair stage to modify source inputs intentionally. The guard is not a hostile-same-user security boundary. The repair action's `last_transition` packet field identifies the prior reviewed commit, action, stage and selected route; stage feedback is not carried into unrelated stages. Authors must define the issue contract and review criteria; the controller does not interpret domain errors. A workflow uses one isolated Git project: changes to separate source repositories or external side effects require explicit workflow-owned integration and remain subject to the trust boundary. See `examples/dynamic-repair` for an executable simulated repair loop and `examples/data-dispatch` for an unrelated structured-data audit and normalization loop. Both use the same controller and deterministic fixture roles.
 
+A self-contained command-role example shows the complete protocol. Create these three tracked files in a clean Git project. Put your actual data in `input.txt`; this example treats that input and its executable helper as frozen authority.
+
+```toml
+# workflow.toml
+schema_version = 1
+name = "minimal-command"
+start = "process"
+frozen_project_files = ["workflow.toml", "job.py", "input.txt"]
+
+[roles.worker]
+kind = "command"
+argv = ["python3", "-B", "job.py"]
+[roles.reviewer]
+kind = "command"
+argv = ["python3", "-B", "job.py"]
+[roles.unblocker]
+kind = "command"
+argv = ["python3", "-B", "job.py"]
+
+[stages.process]
+worker = "worker"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "instructions.md"
+inputs = ["input.txt"]
+outputs = ["result.json"]
+on_pass = "complete"
+max_review_cycles = 2
+```
+
+```python
+# job.py
+import json
+import os
+from pathlib import Path
+import subprocess
+
+packet = json.loads(Path(os.environ["SIMON_PACKET"]).read_text())
+gate = packet["gate"]
+response = {"action_id": packet["action_id"], "candidate_commit": None,
+            "inspected_commit": None}
+if gate == "worker":
+    Path("result.json").write_text(json.dumps({"text": Path("input.txt").read_text().strip()}) + "\n")
+    subprocess.run(["git", "add", "--", "result.json"], check=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "Create result"], check=True)
+    response.update(outcome="complete", report="Created result.",
+                    candidate_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip())
+elif gate == "reviewer":
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if head != packet["candidate_commit"]:
+        raise ValueError("not reviewing the nominated candidate")
+    valid = json.loads(Path("result.json").read_text()) == {"text": Path("input.txt").read_text().strip()}
+    response.update(outcome="pass" if valid else "changes_required",
+                    report="Checked result against input." if valid else "Correct the result.", inspected_commit=head)
+else:
+    response.update(outcome="blocked", report="This example cannot resolve the blocker automatically.")
+print(json.dumps(response))
+```
+
+Create `instructions.md` with the stage instructions, and `input.txt` with the input. Commit all four files, then run `simon-says validate workflow.toml` and `simon-says run /absolute/project/workflow.toml --project /absolute/project --run-dir /absolute/new/run`. The run directory's parent must exist. A command's stdout must contain the response envelope, not just its data artifact; write diagnostics to stderr. Each Worker must both commit its output and return the resulting full commit ID. The Reviewer must independently inspect that exact candidate. In a real workflow, freeze every project-resident helper that affects checks or routing, including reviewer and Unblocker scripts, not only Worker scripts. The controller cannot infer those dependencies.
+
 On the supported macOS platform, the direct-write guard blocks actions from writing run authority. Some setuid tools such as macOS `/bin/ps` cannot execute under the guard. Each command receives a writable private action scratch directory in `SIMON_SCRATCH` and the absolute JSON packet path in `SIMON_PACKET` and writes one JSON response to stdout. The packet includes action ID, stage, gate, frozen instructions/profile/schema, input and output paths, feedback, originating blocked gate, and checkpoint identities, declared reviewer route labels, and the preceding transition when present. Each response supplies `action_id`, `outcome`, nonempty `report`, optional `candidate_commit` and `inspected_commit` fields, and a `route` label when required by a routed reviewer pass. Valid outcomes:
 
 | Gate | Outcomes | Required commit |
