@@ -1,0 +1,31 @@
+schema_version = 1
+name = "magic-diagnostic-analysis-only"
+purpose = "Independently analyze an existing ten-game diagnostic without launching or retrying games."
+start = "analyze"
+frozen_project_files = ["workflow.toml", "original-task.txt", "analyze.md", "profiles/analyzer.md", "design.json", "collection.json", "analysis.schema.json", "evidence-manifest.json", "review.py", "native_tool.py", "runtime_source.py", "runtime_source_manifest.json", "ps_compat.py", "unblock.py"]
+[roles.analyzer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-sol"
+effort = "high"
+profile = "profiles/analyzer.md"
+timeout_seconds = 600
+[roles.verifier]
+kind = "command"
+argv = ["python3", "-B", "review.py"]
+timeout_seconds = 300
+[roles.stop]
+kind = "command"
+argv = ["python3", "-B", "unblock.py"]
+timeout_seconds = 30
+[stages.analyze]
+worker = "analyzer"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "analyze.md"
+inputs = ["design.json", "collection.json", "evidence-manifest.json"]
+outputs = ["analysis.json"]
+output_schema = "analysis.schema.json"
+on_pass = "complete"
+approval_required = true
+max_review_cycles = 2
