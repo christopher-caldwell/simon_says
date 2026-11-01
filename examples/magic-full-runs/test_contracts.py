@@ -75,5 +75,21 @@ class Contracts(unittest.TestCase):
             self.mod.mirror_verify(self.collection)
 
 
+class ReviewFeedback(unittest.TestCase):
+    def test_feedback_identifies_each_repair(self):
+        spec = importlib.util.spec_from_file_location('full_review', HERE/'review.py')
+        review = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(review)
+        values = {'analysis.json': {'original_question':'wrong', 'verified_games':4, 'issues':[]},
+                  'collection.json': {'eligible':3, 'issues':[{'kind':'exclusion'}]}}
+        with patch.object(review, 'load', side_effect=lambda path: values[path]):
+            with self.assertRaises(review.ChangesRequired) as result:
+                review.review_stage('analyze', {'run_context':'question'})
+        message = str(result.exception)
+        self.assertIn('packet.run_context', message)
+        self.assertIn('collection.eligible', message)
+        self.assertIn('collection.issues', message)
+
+
 if __name__ == '__main__':
     unittest.main()
