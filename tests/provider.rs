@@ -449,6 +449,23 @@ fn codex_rejects_an_update_for_untracked_work() {
     assert!(invoke(&plan, dir.path()).is_err());
 }
 #[test]
+fn codex_rejects_excess_outstanding_work_and_invalid_ids() {
+    for program in [
+        "for i in range(4097): print(json.dumps({'type':'item.started','item':{'id':str(i)}}))",
+        "print(json.dumps({'type':'item.started','item':{'id':'x'*513}}))",
+        "print(json.dumps({'type':'item.started','item':{'id':'same'}})); print(json.dumps({'type':'item.started','item':{'id':'same'}}))",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake.py");
+        fs::write(&script, format!("import json\n{program}\nprint('{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"candidate\"}}}}')\nprint('{{\"type\":\"turn.completed\"}}')\n")).unwrap();
+        let mut role = role("command", None);
+        role.argv = vec!["python3".into(), script.to_string_lossy().into()];
+        let mut plan = prepare(&role, Gate::Worker, "", dir.path(), &dir.path().join("packet")).unwrap();
+        plan.adapter = "codex".into();
+        assert!(invoke(&plan, dir.path()).is_err());
+    }
+}
+#[test]
 fn codex_accepts_multiple_complete_turns_and_uses_latest_response() {
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("fake.py");
