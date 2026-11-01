@@ -182,3 +182,22 @@ fn symlinked_actions_parent_is_rejected() {
     assert_eq!(fs::read(run.join("state.json")).unwrap(), before);
     assert!(!run.join("saved-actions/action-2").exists());
 }
+
+#[test]
+fn review_packet_from_different_run_or_snapshot_is_rejected() {
+    for field in ["run_id", "template_digest"] {
+        let (_temp, run) = setup();
+        let state = json(&run.join("state.json"));
+        let path = run.join("actions/action-1/packet.json");
+        let mut packet = json(&path);
+        packet[field] = Value::String("different-authority".into());
+        fs::write(&path, serde_json::to_vec_pretty(&packet).unwrap()).unwrap();
+        let before = fs::read(run.join("state.json")).unwrap();
+        assert!(
+            !approve(&run, &state).status.success(),
+            "accepted mismatched {field}"
+        );
+        assert_eq!(fs::read(run.join("state.json")).unwrap(), before);
+        assert!(!run.join("actions/action-2").exists());
+    }
+}
