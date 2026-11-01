@@ -241,13 +241,24 @@ fn last_transition_can_complete_but_cannot_dispatch_another_stage() {
     w.stages.get_mut("validate").unwrap().approval_required = true;
     act(&mut s, &w, "complete", Some("issues-approval"), None);
     review_route(&mut s, &w, "issues-approval", Some("issues")).unwrap();
-    let id = s.pending_approval.as_ref().unwrap().approval_id.clone();
-    s.status = Status::ApprovalChecking;
-    s.approve(&w, "issues-approval", "digest", &id, 2, None)
-        .unwrap();
     assert_eq!(s.status, Status::Stopped);
+    assert!(s.pending_approval.is_none());
+    assert_eq!(s.action_id, None);
+    assert_eq!(s.accepted_commit, "issues-approval");
     assert_eq!(s.stage, "validate");
     assert_eq!(s.stage_transitions, 0);
+    assert!(s.start("extra".into()).is_err());
+
+    let mut s = State::new(&w, "baseline".into());
+    act(&mut s, &w, "complete", Some("clean-approval"), None);
+    review_route(&mut s, &w, "clean-approval", Some("clean")).unwrap();
+    assert_eq!(s.status, Status::AwaitingApproval);
+    let id = s.pending_approval.as_ref().unwrap().approval_id.clone();
+    s.status = Status::ApprovalChecking;
+    s.approve(&w, "clean-approval", "digest", &id, 3, None)
+        .unwrap();
+    assert_eq!(s.status, Status::Complete);
+    assert_eq!(s.stage_transitions, 1);
 }
 
 #[test]

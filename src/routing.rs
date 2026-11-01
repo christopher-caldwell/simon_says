@@ -192,7 +192,13 @@ impl State {
                 match response.outcome.as_str() {
                     "pass" => {
                         self.accepted_commit = self.candidate_commit.take().unwrap();
-                        if stage.approval_required {
+                        let next = destination.as_deref().unwrap();
+                        // Do not ask for approval if no authorized transition
+                        // can follow it. The reviewed checkpoint remains safe.
+                        if let Some(reason) = self.transition_block_reason(workflow, next) {
+                            self.status = Status::Stopped;
+                            self.stop_reason = Some(reason.into());
+                        } else if stage.approval_required {
                             self.pending_approval = Some(PendingApproval {
                                 approval_id: uuid::Uuid::new_v4().to_string(),
                                 stage: self.stage.clone(),
@@ -204,7 +210,7 @@ impl State {
                         } else {
                             self.advance(
                                 workflow,
-                                destination.as_deref().unwrap(),
+                                next,
                                 &response.action_id,
                                 response.route.as_deref(),
                             );
@@ -322,25 +328,16 @@ impl State {
         self.advance(workflow, &next, &review_action, route.as_deref());
         Ok(())
     }
-    fn advance(
-        &mut self,
-        workflow: &Workflow,
-        next: &str,
-        review_action: &str,
-        route: Option<&str>,
-    ) {
+    /// Check identically before requesting approval and before dispatching.
+    fn transition_block_reason(&self, workflow: &Workflow, next: &str) -> Option<&'static str> {
         if workflow
             .max_stage_transitions
             .is_some_and(|max| self.stage_transitions >= max)
         {
-            self.status = Status::Stopped;
-            self.stop_reason = Some("workflow stage transition limit reached".into());
-            return;
+            return Some("workflow stage transition limit reached");
         }
         let Some(count) = self.stage_transitions.checked_add(1) else {
-            self.status = Status::Stopped;
-            self.stop_reason = Some("workflow stage transition counter overflow".into());
-            return;
+            return Some("workflow stage transition counter overflow");
         };
         // A nonterminal stage cannot ever finish if entering it uses the last
         // available transition. Stop at its predecessor before dispatching any
@@ -350,11 +347,23 @@ impl State {
                 .max_stage_transitions
                 .is_some_and(|max| count >= max)
         {
+            return Some("workflow stage transition limit reached");
+        }
+        None
+    }
+    fn advance(
+        &mut self,
+        workflow: &Workflow,
+        next: &str,
+        review_action: &str,
+        route: Option<&str>,
+    ) {
+        if let Some(reason) = self.transition_block_reason(workflow, next) {
             self.status = Status::Stopped;
-            self.stop_reason = Some("workflow stage transition limit reached".into());
+            self.stop_reason = Some(reason.into());
             return;
         }
-        self.stage_transitions = count;
+        self.stage_transitions += 1; // overflow checked by transition_block_reason
         self.last_transition = Some(Transition {
             from_stage: self.stage.clone(),
             to_stage: next.to_owned(),
