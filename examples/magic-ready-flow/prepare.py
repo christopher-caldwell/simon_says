@@ -26,9 +26,12 @@ def main():
     parser.add_argument('prepared_game_project', type=Path)
     parser.add_argument('collection_repo', type=Path)
     parser.add_argument('new_project', type=Path)
+    parser.add_argument('--seed', help='optional distinct bounded diagnostic namespace')
     args = parser.parse_args()
     here = Path(__file__).resolve().parent
     target = args.new_project.absolute()
+    if args.seed is not None and not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', args.seed):
+        raise ValueError('seed must be 1–100 ASCII letters, numbers, dot, underscore or hyphen')
     # The existing preparer enforces clean source, absent isolated destination,
     # native/runtime provenance, and actual profile/model/effort snapshots.
     subprocess.run([sys.executable, '-B', str(here.parent / 'magic-four-roles/prepare.py'),
@@ -47,6 +50,11 @@ def main():
                 raise ValueError(f'missing {role} {field} in fixture')
         workflow = workflow[:start] + chunk + (workflow[end:] if end >= 0 else '')
     (target / 'workflow.toml').write_text(workflow)
+    if args.seed is not None:
+        config_path = target / 'simon-game/game-config.json'
+        config = json.loads(config_path.read_text())
+        config['seedNamespace'] = args.seed
+        config_path.write_text(json.dumps(config, indent=2) + '\n')
     for name in ('triage.md', 'triage.schema.json', 'verify-stage.md', 'build-stage.md', 'review.py', 'verify.py', 'escalate.py'):
         shutil.copyfile(here / name, target / 'simon-four' / name)
     game = target / 'simon-game/game.py'
@@ -66,7 +74,7 @@ def main():
         response.update(route=route, report='Independently verified native game evidence; route: ' + route)"""
     source = replace_once(source, old, new, 'review warning route')
     review.write_text(source)
-    git(target, 'add', '--', 'workflow.toml', 'simon-four', 'simon-game/game.py', 'simon-game/review.py')
+    git(target, 'add', '--', 'workflow.toml', 'simon-four', 'simon-game/game.py', 'simon-game/review.py', 'simon-game/game-config.json')
     git(target, 'commit', '-m', 'Add build, verification and warning triage')
     print(json.dumps({'project': str(target), 'baseline': git(target, 'rev-parse', 'HEAD')}))
 

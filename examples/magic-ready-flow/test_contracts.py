@@ -26,6 +26,15 @@ class Contract(unittest.TestCase):
         self.assertEqual(w['stages']['escalate']['worker'], 'escalation')
         self.assertLessEqual(w['max_stage_transitions'], 9)
 
+    def test_invalid_seed_is_rejected_before_project_creation(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / 'new-project'
+            p = subprocess.run(['python3', '-B', str(HERE / 'prepare.py'), '/nonexistent', '/nonexistent',
+                                str(target), '--seed', '../bad'], text=True, capture_output=True)
+            self.assertNotEqual(p.returncode, 0)
+            self.assertIn('seed must be', p.stderr)
+            self.assertFalse(target.exists())
+
     def test_game_reviewer_routes_warning_inventory_without_hiding_it(self):
         source = (HERE.parent / 'magic-dynamic-game/review.py').read_text()
         # Apply the same narrow recorded transformation as the preparer and
