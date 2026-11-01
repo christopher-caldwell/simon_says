@@ -98,3 +98,57 @@ fn invalid_input_blocks_and_unblocker_stops() {
         "blocked"
     );
 }
+
+#[test]
+fn reviewer_requests_changes_for_a_committed_wrong_report() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    for item in fs::read_dir("examples/data-report").unwrap() {
+        let item = item.unwrap();
+        fs::copy(item.path(), repo.join(item.file_name())).unwrap();
+    }
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["add", "."]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+    );
+    fs::write(
+        repo.join("validation.json"),
+        r#"{"count":3,"total":100,"minimum":4,"maximum":9}"#,
+    )
+    .unwrap();
+    git(&repo, &["add", "validation.json"]);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "bad candidate",
+        ],
+    );
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let packet = temp.path().join("packet.json");
+    let review = action(&repo, &packet, "validate", "reviewer", Some(&head));
+    assert_eq!(review["outcome"], "changes_required");
+    assert_eq!(review["inspected_commit"], head);
+    let corrected = action(&repo, &packet, "validate", "worker", None);
+    let candidate = corrected["candidate_commit"].as_str().unwrap();
+    assert_eq!(
+        action(&repo, &packet, "validate", "reviewer", Some(candidate))["outcome"],
+        "pass"
+    );
+}
