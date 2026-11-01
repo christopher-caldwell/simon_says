@@ -107,3 +107,22 @@ fn rejects_invalid_schemas_external_refs_and_git_paths() {
             .is_err()
     );
 }
+#[test]
+fn rejects_unsupported_schema_drafts_and_unresolved_references() {
+    let (d, t) = setup();
+    for schema in [
+        r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","prefixItems":[{"type":"integer"}]}"#,
+        r##"{"$ref":"#/missing"}"##,
+    ] {
+        fs::write(d.path().join("report.schema.json"), schema).unwrap();
+        assert!(Workflow::parse_and_validate(&t, d.path()).is_err());
+    }
+}
+#[cfg(unix)]
+#[test]
+fn rejects_symlinked_template() {
+    let (d, t) = setup();
+    fs::write(d.path().join("real.toml"), t).unwrap();
+    std::os::unix::fs::symlink("real.toml", d.path().join("link.toml")).unwrap();
+    assert!(Snapshot::create(&d.path().join("link.toml")).is_err());
+}

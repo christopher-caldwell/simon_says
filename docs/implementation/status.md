@@ -1,27 +1,24 @@
 # Implementation status
 
-This is a partial implementation, not a v0 release. The executable provides `validate`, `freeze`, and `inspect` only. The example under `examples/basic` is a validator fixture; it is not a runnable workflow.
+This is a working early runtime, **not an accepted v0 release**. See the README for commands, recovery and the same-user trust boundary.
 
-## Implemented and tested
+## Implemented
 
-- Strict TOML deserialization, version 1, bounded role/stage references, linear terminating and reachable pass routes, path checks, authoritative file loading, and JSON Schema compilation (external schema references rejected).
-- A self-contained content snapshot and digest, exclusive snapshot creation, and verification of its internal digest. The digest is not independently anchored and does not resist intentional modification of the snapshot and its digest together.
-- Pure in-memory routing logic for action identity, responses, review correction limits, and a bounded Unblocker detour. This code assumes a caller has already verified Git and outputs; no such controller exists.
+- Strict versioned TOML loading, named acyclic pass routes, reference and path checks, frozen instructions/profiles/schemas, and draft-07 JSON Schema compilation and artifact validation.
+- A locked durable JSON run record and per-action packet, exact invocation, transport logs, result/failure; running is persisted before action invocation. Interrupted or failed actions require explicit reset rather than automatic replay.
+- Detached worker and review worktrees, full Git object identity and ancestry checks, tracked regular-file artifact checks, separate candidate and accepted commits, and a narrowly verified reset that refuses untracked or ignored files.
+- Command, Codex and Claude invocation plans, action envelopes, Worker/Reviewer correction loops, bounded Unblocker routing, and automatic continuation through stages.
+- Two executable examples with the same engine and subprocess/Git tests, including corrections, Worker and Reviewer blocks, invalid schema and identity, process failure, and fresh-process interruption.
 
-## Missing
+## Limitations and remaining acceptance work
 
-There is no durable run state, action invocation, provider integration, action log, Git worktree or checkpoint handling, artifact validation, autonomous run, crash handling, resume, reset, or executable domain example. No actual workflow has been run. Snapshot verification does not revalidate template semantics or establish a trusted authority root. Provider args and effort are parsed but not validated against the Orchestrate adapter policies. Validate is a preliminary check, not execution approval. Path checks cannot protect against concurrent filesystem substitution.
+- Same-user command and provider processes are trusted, not sandboxed by Simon Says. They can write the run directory and shared Git objects/refs or perform external effects. Live state and snapshot changes are detected after a returning action and restored where possible, but a process can alter both records and kill the controller before that check. A stronger OS privilege boundary is necessary to enforce frozen authority against hostile actions. Git checkout filters can also run before an action is marked running; hooks are disabled for managed Git commands.
+- A blocked Worker with dirty tracked changes stops for explicit reset. Unblocker actions run in a read-only-intent checkout; they cannot commit repository repairs. Git cannot undo external effects. Operators must confirm action processes and descendants have exited before reset; escaped process groups cannot be verified.
+- Reviewer/Unblocker worktrees are retained; there is no managed worktree cleanup command. Interrupted initialization requires inspection/manual cleanup. Action timeouts and cancellation are not implemented.
+- Schema support is draft-07 without references; selected later-draft keywords are conservatively rejected. JSON Schema verifies structure, not domain correctness.
+- Codex has been smoke-tested in one local configuration. Claude, other models and permission/sandbox combinations have not been tested live. Profile settings do not provide a security boundary.
+- The synthetic opening-hand example is not the real Magic simulator. The real simulator also ran through the controller in an isolated one-game diagnostic, with induced block, retry and correction; see [evidence](evidence.md). A single diagnostic game cannot establish simulation quality.
 
-Real Magic tools and inputs have not been identified or tested. Neither the example nor the routing tests prove real provider, simulation, or end-to-end behavior. Git cannot undo external network or database side effects; any future recovery implementation must make that boundary explicit.
+## Reference baseline
 
-## Reference characterization
-
-Orchestrate `281af897fcba59a4ef9476c2ce7aa40ed025b6ed` uses gate-specific controller logic tightly coupled to engineering Build, while its `crates/core/src/provider.rs` provides a potentially reusable invocation seam. Its tests validate persisted running actions, exact action IDs, detached review checkouts and bounded Unblocker routing. The new repository is the appropriate home for the generic controller; migrating Build or transplanting its entire controller would create avoidable coupling. Shared provider code remains to be integrated safely.
-
-Baseline commands run before changes:
-
-- Orchestrate `cargo test --workspace`: failed three CLI architecture tests concerning skill directories; 22 CLI unit tests passed before those failures.
-- Orchestrate `cargo test -p orchestrate-build -p orchestrate-core`: passed 48 tests.
-- Control Tower `cargo test --workspace`: one run passed; an independent concurrent run failed the SSE timeout test `web::tests::sse_shows_mutation_output_while_the_later_verifier_is_running`, and its isolated rerun also timed out. This suggests timing sensitivity; no cause was established.
-
-The reference checkouts remained clean. No production system or provider was exercised.
+Orchestrate `281af897fcba59a4ef9476c2ce7aa40ed025b6ed` has an engineering-specific Build controller and a reusable provider seam; this repository adapts provider patterns without modifying Build. `cargo test -p orchestrate-build -p orchestrate-core` passed 48 tests. `cargo test --workspace` failed three CLI architecture tests concerning skill directories. Control Tower `cargo test --workspace` passed once, while a concurrent run and isolated rerun timed out in `web::tests::sse_shows_mutation_output_while_the_later_verifier_is_running`; the cause was not established. Reference checkouts were left clean.

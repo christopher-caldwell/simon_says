@@ -1,8 +1,6 @@
-use simon_says::{routing, Role};
-#[path = "../src/provider.rs"]
-mod provider;
-use provider::{extract_response, invoke, prepare, validate_native_args};
 use routing::Gate;
+use simon_says::provider::{extract_response, invoke, prepare, validate_native_args};
+use simon_says::{routing, Role};
 use std::{fs, path::Path};
 
 fn role(kind: &str, adapter: Option<&str>) -> Role {
@@ -119,4 +117,20 @@ fn extracts_native_final_messages_and_session_ids() {
         assert_eq!(s.as_deref(), Some(id));
     }
     assert_eq!(extract_response("unstructured text"), (None, None));
+}
+#[cfg(unix)]
+#[test]
+fn surviving_action_process_group_is_uncertain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let packet = tmp.path().join("packet.json");
+    fs::write(&packet, "{}").unwrap();
+    let script = tmp.path().join("spawn.py");
+    fs::write(&script, "import subprocess\nsubprocess.Popen(['python3','-c','import time; time.sleep(5)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\nprint('{}')\n").unwrap();
+    let mut r = role("command", None);
+    r.argv = vec!["python3".into(), script.to_string_lossy().into()];
+    let plan = prepare(&r, Gate::Worker, "", tmp.path(), &packet).unwrap();
+    let actions = tmp.path().join("action");
+    fs::create_dir(&actions).unwrap();
+    let error = invoke(&plan, &actions).unwrap_err();
+    assert!(error.to_string().contains("processes running"));
 }

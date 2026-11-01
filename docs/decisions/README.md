@@ -10,3 +10,5 @@ Decision records preserve the product direction and assumptions without making p
 | [ADR-0004](0004-sibling-runtime-first.md) | Proposed | New crate alongside existing Build, prove before migration |
 
 For unresolved design details see [open questions](../implementation/open-questions.md). Do not amend a past decision retroactively to make later implementation appear authorized.
+
+- [ADR-0005: Separate runtime repository](0005-separate-runtime-repository.md) — implementation decision adapting the sibling-crate proposal to separate repository ownership.

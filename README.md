@@ -1,16 +1,26 @@
 # Simon Says
 
-Simon Says is an early implementation of a local, model-configured workflow engine. **The workflow runner is not implemented.** The current CLI validates a proposed version-1 TOML definition, writes a snapshot of the definition and referenced instructions/profiles/schemas, and inspects a snapshot. It does not invoke agents or commands, validate output artifacts, create runs or Git checkpoints, or perform recovery. Do not use it to execute workflows.
+Simon Says is an early local, sequential workflow runner. A TOML definition assigns Worker, Reviewer and Unblocker roles to stages; the Rust controller validates and snapshots the definition, executes actions, checks Git candidates and declared artifacts, and routes the results. This is **not yet an accepted v0 release**: see [implementation status](docs/implementation/status.md) for evidence and open reliability limitations.
 
 ```sh
 cargo test
-cargo run -- validate examples/basic/workflow.toml
-cargo run -- freeze examples/basic/workflow.toml /tmp/simon-snapshot.json
-cargo run -- inspect /tmp/simon-snapshot.json
+cargo run -- validate examples/data-report/workflow.toml
+cargo run -- run /path/to/workflow.toml --project /path/to/clean-git-project --run-dir /path/outside/project/new-run
+cargo run -- status /path/outside/project/new-run
+cargo run -- resume /path/outside/project/new-run
 ```
 
-The example is a template validation fixture, not an executable workflow. The validator checks version, names, required roles, one terminating reachable pass route, path syntax, referenced files and JSON Schema compilation. It rejects symlinked authority references, external schema references and `.git` path components. It does not validate runtime inputs, provider argument policy or domain output. JSON Schema validation of actual artifacts is not yet implemented.
+`run` requires a new run directory whose parent exists and a clean Git project. It continues until completion, a bounded stop, or an error. The project checkout is left alone; a detached worktree is created under the run directory. Each action has a packet, invocation, stdout, stderr, and result or failure under `actions/`; detached review checkouts are retained under `reviews/`. `status` prints durable JSON including candidate and accepted commits. An interrupted or failed action stays `running` and `resume` refuses to replay it.
 
-Snapshots contain authoritative file contents and a SHA-256 digest. The digest detects accidental changes but is stored in the same editable file; it is not an authentication mechanism, and an attacker can change the contents and recompute it. No execution authority or independent digest anchor exists yet. Configuration is trusted local input; it is not a sandbox.
+Recovery is explicit. First confirm the original action and its descendants have exited and reconcile any external effects. Then use:
 
-The library also contains a **pure routing prototype** with Worker, Reviewer, and Unblocker outcomes, bounded corrections and one Unblocker detour. It performs no Git, I/O, persistence or artifact validation, so it must not be treated as a controller. The proposed requirements and acceptance matrix are in [docs](docs/README.md); current progress and baseline evidence are in [implementation status](docs/implementation/status.md).
+```sh
+cargo run -- reset /path/to/run --acknowledge-external-effects
+cargo run -- resume /path/to/run
+```
+
+Reset verifies the recorded worktree and checkpoint, discards tracked changes only there, and refuses untracked or ignored files. It never runs `git clean`. Git reset does not undo network calls, database writes, or other external effects. A correction-limit reset requeues the Worker and starts a new bounded correction attempt. A failed initialization cannot be resumed; inspect its run directory and worktree registration before manual cleanup.
+
+See [authoring guide](docs/implementation/authoring-guide.md), the [data report](examples/data-report/README.md), and [synthetic opening-hand](examples/synthetic-opening-hand/README.md) examples. Neither synthetic simulation nor structural schema validation proves domain correctness.
+
+**Trust boundary:** commands and agent processes run with the invoking user's privileges. Git worktrees are isolation for checkout contents, not a security sandbox. A malicious same-user action can access the run directory, Git object store and external resources; a coordinated change to both state and snapshot across a crash can evade the current digest check. The controller detects and restores many live mutations, but cannot enforce frozen authority against adversarial same-user processes. Only run trusted workflows in trusted repositories. Configured Git checkout filters also execute with user privileges. Provider arguments are trusted configuration, not a safety policy.

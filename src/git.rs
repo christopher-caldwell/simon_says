@@ -22,7 +22,12 @@ pub struct Worktree {
 
 fn git(repo: &Path, args: &[&str]) -> Result<Output> {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo).args(args);
+    cmd.arg("-c")
+        .arg("core.hooksPath=/dev/null")
+        .arg("-C")
+        .arg(repo)
+        .args(args);
+    cmd.env("GIT_NO_REPLACE_OBJECTS", "1");
     // A parent process must not redirect this command to a different repository.
     for key in [
         "GIT_DIR",
@@ -87,7 +92,18 @@ fn detached(repo: &Path) -> Result<()> {
     );
     Ok(())
 }
+fn no_hidden_index_changes(repo: &Path) -> Result<()> {
+    let entries = git(repo, &["ls-files", "-v", "-z"])?;
+    for entry in entries.stdout.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        ensure!(
+            !entry[0].is_ascii_lowercase() && entry[0] != b'S',
+            "worktree has assume-unchanged or skip-worktree index entries"
+        );
+    }
+    Ok(())
+}
 fn clean(repo: &Path) -> Result<()> {
+    no_hidden_index_changes(repo)?;
     let output = git(
         repo,
         &[
@@ -229,6 +245,25 @@ impl Worktree {
         self.verify_owned()?;
         clean(&self.path)
     }
+    /// Reject ignored as well as untracked or tracked mutations in a fresh review checkout.
+    pub fn verify_pristine(&self) -> Result<()> {
+        self.verify_owned()?;
+        let status = git(
+            &self.path,
+            &[
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignored=matching",
+                "--ignore-submodules=none",
+            ],
+        )?;
+        ensure!(
+            status.stdout.is_empty(),
+            "review checkout has tracked, untracked or ignored changes"
+        );
+        Ok(())
+    }
     /// Verify HEAD, ancestry and clean status before a candidate can be reviewed.
     pub fn verify_candidate(&self, candidate: &str, ancestor_commit: &str) -> Result<()> {
         self.verify_owned()?;
@@ -248,6 +283,7 @@ impl Worktree {
     pub fn reset_to(&self, checkpoint: &str) -> Result<()> {
         self.verify_owned()?;
         detached(&self.path)?;
+        no_hidden_index_changes(&self.path)?;
         ancestor(&self.path, &self.baseline, checkpoint)?;
         let status = git(
             &self.path,

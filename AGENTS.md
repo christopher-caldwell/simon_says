@@ -1,6 +1,6 @@
 # Instructions for implementation agents
 
-This repository contains a **partial implementation**, not a working generic runtime. The CLI validates and snapshots definitions; the examples are not executable. See [implementation status](docs/implementation/status.md). Read [README.md](README.md), [scope](docs/scope.md), and [decision records](docs/decisions/README.md) before proposing changes.
+This repository contains an **early generic runtime**, not an accepted v0 release. See [implementation status](docs/implementation/status.md) for implemented behavior, trust boundaries and remaining work. Read [README.md](README.md), [scope](docs/scope.md), and [decision records](docs/decisions/README.md) before proposing changes.
 
 ## Principal objective
 

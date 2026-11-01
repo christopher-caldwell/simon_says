@@ -1,6 +1,4 @@
-#[path = "../src/git.rs"]
-mod git;
-use git::Worktree;
+use simon_says::git::Worktree;
 use std::{fs, path::Path, process::Command};
 fn command(dir: &Path, args: &[&str]) -> String {
     let o = Command::new("git")
@@ -99,4 +97,13 @@ fn non_descendant_candidate_is_rejected() {
     command(&w.path, &["commit", "--allow-empty", "-qm", "unrelated"]);
     let c = w.head().unwrap();
     assert!(w.verify_candidate(&c, &w.baseline).is_err());
+}
+#[test]
+fn hidden_index_flags_cannot_disguise_dirty_worker() {
+    let (_tmp, repo, run) = fixture();
+    let w = Worktree::create(&repo, &run).unwrap();
+    command(&w.path, &["update-index", "--assume-unchanged", "data"]);
+    fs::write(w.path.join("data"), "hidden change").unwrap();
+    assert!(w.verify_clean().is_err());
+    assert!(w.reset_to(&w.baseline).is_err());
 }

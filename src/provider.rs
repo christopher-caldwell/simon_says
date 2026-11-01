@@ -218,15 +218,47 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
     };
     let stdout = open(&stdout_path)?;
     let stderr = open(&stderr_path)?;
-    let status = Command::new(&plan.program)
+    let mut command = Command::new(&plan.program);
+    command
         .args(&plan.argv)
         .current_dir(&plan.cwd)
         .env("SIMON_PACKET", &plan.packet_path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .status()
+        .stderr(Stdio::from(stderr));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
         .with_context(|| format!("invoke {}", plan.program))?;
+    #[cfg(unix)]
+    let group = child.id() as libc::pid_t;
+    let status = child
+        .wait()
+        .with_context(|| format!("wait for {}", plan.program))?;
+    #[cfg(unix)]
+    {
+        // A surviving same-group descendant may still mutate work after the parent exits.
+        let grace = if plan.adapter == "command" { 2 } else { 20 };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(grace);
+        loop {
+            let rc = unsafe { libc::kill(-group, 0) };
+            let error = std::io::Error::last_os_error();
+            if rc != 0 && error.raw_os_error() == Some(libc::ESRCH) {
+                break;
+            }
+            ensure!(
+                std::time::Instant::now() < deadline,
+                "action left processes running in its process group; action is uncertain"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    fs::File::open(&stdout_path)?.sync_all()?;
+    fs::File::open(&stderr_path)?.sync_all()?;
     let bytes =
         fs::read(&stdout_path).with_context(|| format!("read {}", stdout_path.display()))?;
     let text = String::from_utf8(bytes).context("provider stdout is not UTF-8")?;

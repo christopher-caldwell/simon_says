@@ -62,7 +62,7 @@ fn relative(s: &str) -> Result<()> {
         !s.is_empty()
             && Path::new(s)
                 .components()
-                .all(|c| matches!(c, Component::Normal(part) if part != ".git")),
+                .all(|c| matches!(c, Component::Normal(part) if !part.to_string_lossy().eq_ignore_ascii_case(".git"))),
         "path must be a confined relative path: {s:?}"
     );
     Ok(())
@@ -127,6 +127,29 @@ impl Workflow {
                         role.argv.is_empty(),
                         "agent role {name} cannot specify argv"
                     );
+                    let adapter = role.adapter.as_deref().unwrap();
+                    provider::validate_native_args(adapter, &role.args)?;
+                    if let Some(effort) = &role.effort {
+                        let valid = match adapter {
+                            "codex" => matches!(
+                                effort.as_str(),
+                                "none"
+                                    | "minimal"
+                                    | "low"
+                                    | "medium"
+                                    | "high"
+                                    | "xhigh"
+                                    | "max"
+                                    | "ultra"
+                            ),
+                            "claude" => matches!(
+                                effort.as_str(),
+                                "low" | "medium" | "high" | "xhigh" | "max" | "ultracode"
+                            ),
+                            _ => false,
+                        };
+                        ensure!(valid, "invalid effort for role {name}");
+                    }
                     refs.insert(
                         role.profile
                             .as_ref()
@@ -207,16 +230,43 @@ impl Workflow {
     }
 }
 fn validate_schema(schema: &serde_json::Value) -> Result<()> {
+    if let Some(draft) = schema.get("$schema") {
+        ensure!(
+            draft
+                .as_str()
+                .is_some_and(|v| v == "http://json-schema.org/draft-07/schema#"
+                    || v == "http://json-schema.org/draft-07/schema"
+                    || v == "https://json-schema.org/draft-07/schema#"
+                    || v == "https://json-schema.org/draft-07/schema"),
+            "only JSON Schema draft-07 is supported"
+        );
+    }
     fn check_refs(value: &serde_json::Value) -> Result<()> {
         match value {
             serde_json::Value::Object(map) => {
                 for (k, v) in map {
-                    if k == "$ref" || k == "$dynamicRef" || k == "$recursiveRef" {
-                        ensure!(
-                            v.as_str().is_some_and(|s| s.starts_with('#')),
-                            "only local fragment schema references are supported"
-                        );
-                    }
+                    ensure!(
+                        !matches!(
+                            k.as_str(),
+                            "prefixItems"
+                                | "unevaluatedItems"
+                                | "unevaluatedProperties"
+                                | "dependentSchemas"
+                                | "dependentRequired"
+                                | "minContains"
+                                | "maxContains"
+                                | "$defs"
+                                | "$vocabulary"
+                                | "$dynamicAnchor"
+                                | "$recursiveAnchor"
+                                | "contentSchema"
+                        ),
+                        "unsupported later-draft schema keyword or property: {k}"
+                    );
+                    ensure!(
+                        !matches!(k.as_str(), "$ref" | "$dynamicRef" | "$recursiveRef"),
+                        "JSON Schema references are not supported"
+                    );
                     check_refs(v)?;
                 }
             }
@@ -230,9 +280,13 @@ fn validate_schema(schema: &serde_json::Value) -> Result<()> {
         Ok(())
     }
     check_refs(schema)?;
-    jsonschema::JSONSchema::compile(schema).map_err(|e| anyhow::anyhow!("{e}"))?;
+    jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft7)
+        .compile(schema)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }
+
 fn digest(template: &str, files: &BTreeMap<String, String>) -> String {
     let mut hash = Sha256::new();
     for (name, content) in
@@ -247,10 +301,20 @@ fn digest(template: &str, files: &BTreeMap<String, String>) -> String {
 }
 impl Snapshot {
     pub fn create(path: &Path) -> Result<Self> {
+        let metadata =
+            fs::symlink_metadata(path).with_context(|| format!("inspect {}", path.display()))?;
+        ensure!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "workflow template must be a regular, non-symlink file"
+        );
         let template =
             fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let (_, files) =
-            Workflow::parse_and_validate(&template, path.parent().unwrap_or(Path::new(".")))?;
+        let (_, files) = Workflow::parse_and_validate(
+            &template,
+            path.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new(".")),
+        )?;
         let sha256 = digest(&template, &files);
         Ok(Self {
             schema_version: 1,
@@ -289,3 +353,13 @@ pub fn template_path(path: &str) -> PathBuf {
 }
 
 pub mod routing;
+
+pub mod store;
+
+pub mod artifact;
+
+pub mod provider;
+
+pub mod git;
+
+pub mod controller;

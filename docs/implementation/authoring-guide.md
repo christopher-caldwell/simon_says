@@ -1,0 +1,17 @@
+# Authoring a workflow
+
+Use `examples/data-report/workflow.toml` as an executable starting point. The workflow and its instruction, profile and schema paths are relative to the template directory. Inputs and outputs are paths relative to the project Git root. Names use ASCII letters, digits, `_` and `-`. All stages must be reachable from `start`, with one acyclic `on_pass` route ending at `complete`. Define a Worker, Reviewer and Unblocker role for each stage and set `max_review_cycles` from 1 to 100.
+
+A `command` role provides an argv array and runs directly, without a shell. `agent` roles support `codex` and `claude`, an optional model, effort and native args, and a required frozen profile. Model and native permission options are trusted local configuration. Run `simon-says validate <template>` before running. The controller checks inputs and outputs are regular files tracked at the recorded commit. A stage may name one JSON output schema when it has exactly one output. Schema validation uses draft-07; absent `$schema` means draft-07. References and selected newer-draft keywords are rejected. The conservative keyword check also rejects those words as property names. Unknown schema extensions may be ignored by the validator; use draft-07 assertions and test the contract. Arbitrary semantic claims belong in review instructions or a deterministic reviewer.
+
+Each command receives the absolute JSON packet path in `SIMON_PACKET` and writes one JSON response to stdout. The packet includes action ID, stage, gate, frozen instructions/profile/schema, input and output paths, feedback, originating blocked gate, and checkpoint identities. Each response supplies `action_id`, `outcome`, nonempty `report`, and optional `candidate_commit` and `inspected_commit` fields. Valid outcomes:
+
+| Gate | Outcomes | Required commit |
+| --- | --- | --- |
+| Worker | `complete`, `blocked` | `candidate_commit` on complete |
+| Reviewer | `pass`, `changes_required`, `blocked` | `inspected_commit` on every response |
+| Unblocker | `retry`, `blocked` | none |
+
+A completing Worker commits outputs itself and leaves a clean detached checkout. A blocked Worker must leave HEAD and checkout unchanged; dirty partial work stops for explicit recovery instead of invoking the Unblocker. Reviewer and Unblocker run in separate detached checkouts and must leave them unchanged. The reviewer must inspect the exact candidate. A correction returns feedback and the candidate to the same stage's Worker. One Unblocker retry is allowed per blocked attempt; a second block stops. All subprocesses must wait for their children: surviving same-process-group descendants make an action uncertain. Escaped process groups cannot be reliably controlled.
+
+The engine validates mechanics and routes the Reviewer's decision; it does not decide whether that judgment is correct. Input files must be committed in the baseline or created and accepted by a previous stage. Template instructions and schemas are frozen in the run snapshot, not reread from the original template during execution. See the README's trust boundary before running untrusted code.
