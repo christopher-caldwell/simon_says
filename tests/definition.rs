@@ -181,3 +181,19 @@ fn rejects_symlinked_run_context() {
         .with_context(&d.path().join("link"))
         .is_err());
 }
+#[test]
+fn frozen_project_paths_cannot_escape_duplicate_or_be_outputs() {
+    let (d, t) = setup();
+    for values in [
+        "[\"../unsafe\"]",
+        "[\"x\",\"x\"]",
+        "[\"reports/validation.json\"]",
+    ] {
+        let bad = t.replacen(
+            "schema_version = 1",
+            &format!("schema_version = 1\nfrozen_project_files = {values}"),
+            1,
+        );
+        assert!(Workflow::parse_and_validate(&bad, d.path()).is_err());
+    }
+}

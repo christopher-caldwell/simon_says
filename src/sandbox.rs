@@ -65,9 +65,20 @@ pub fn prepare(
     program: &str,
     args: &[String],
 ) -> Result<SandboxPlan> {
+    prepare_with_frozen(run, cwd, scratch, program, args, &[])
+}
+/// Also deny direct writes to the explicitly frozen project files.
+pub fn prepare_with_frozen(
+    run: &Path,
+    cwd: &Path,
+    scratch: &Path,
+    program: &str,
+    args: &[String],
+    frozen: &[String],
+) -> Result<SandboxPlan> {
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (run, cwd, scratch, program, args);
+        let _ = (run, cwd, scratch, program, args, frozen);
         anyhow::bail!("action sandbox is only supported on macOS");
     }
     #[cfg(target_os = "macos")]
@@ -102,7 +113,59 @@ pub fn prepare(
             cwd == run.join("worktree") || cwd == run.join("reviews").join(id).join("worktree"),
             "checkout must be this action's controlled worktree"
         );
-        let profile = format!("(version 1)\n(allow default)\n(deny file-write* (subpath {}))\n(allow file-write* (subpath {}) (subpath {}))\n", literal(&run)?, literal(&cwd)?, literal(&scratch)?);
+        let mut profile = format!("(version 1)\n(allow default)\n(deny file-write* (subpath {}))\n(allow file-write* (subpath {}) (subpath {}))\n", literal(&run)?, literal(&cwd)?, literal(&scratch)?);
+        // A literal file deny alone is insufficient: an action could rename
+        // its parent directory, modify the file at its new path, then rename
+        // the directory back. Pin the checkout and each protected ancestor
+        // against unlink/rename, without denying ordinary sibling edits.
+        let mut protected_directories = std::collections::BTreeSet::new();
+        protected_directories.insert(cwd.clone());
+        for name in frozen {
+            crate::validate_relative_path(name).context("invalid frozen project path")?;
+            let path = cwd.join(name);
+            let metadata = std::fs::symlink_metadata(&path)
+                .with_context(|| format!("inspect frozen project file {name}"))?;
+            ensure!(
+                metadata.is_file()
+                    && !metadata.file_type().is_symlink()
+                    && std::fs::canonicalize(&path)? == path,
+                "unsafe frozen project file {name}"
+            );
+            profile.push_str(&format!(
+                "(deny file-write* (literal {}))\n",
+                literal(&path)?
+            ));
+            let mut ancestor = path.parent().context("frozen project path has no parent")?;
+            loop {
+                ensure!(
+                    ancestor.starts_with(&cwd),
+                    "frozen project ancestor escapes checkout"
+                );
+                let meta = std::fs::symlink_metadata(ancestor).with_context(|| {
+                    format!("inspect frozen project ancestor {}", ancestor.display())
+                })?;
+                ensure!(
+                    meta.is_dir()
+                        && !meta.file_type().is_symlink()
+                        && std::fs::canonicalize(ancestor)? == ancestor,
+                    "unsafe frozen project ancestor {}",
+                    ancestor.display()
+                );
+                protected_directories.insert(ancestor.to_owned());
+                if ancestor == cwd {
+                    break;
+                }
+                ancestor = ancestor
+                    .parent()
+                    .context("frozen project ancestor escapes checkout")?;
+            }
+        }
+        for directory in protected_directories {
+            profile.push_str(&format!(
+                "(deny file-write-unlink (literal {}))\n",
+                literal(&directory)?
+            ));
+        }
         let binary = Path::new("/usr/bin/sandbox-exec");
         ensure!(binary.is_file(), "macOS sandbox-exec is unavailable");
         // Probe syntax and availability before offering a plan. This does not

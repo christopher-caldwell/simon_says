@@ -26,6 +26,11 @@ pub fn initialize_with_context(
     }
     let workflow: Workflow = toml::from_str(&snapshot.template)?;
     let intent = InitializationIntent::capture(project, run_dir)?;
+    // Fail before creating a run if declared project authority is absent or unsafe.
+    for path in &workflow.frozen_project_files {
+        artifact::tracked_blob(&intent.source, &intent.baseline, path)
+            .with_context(|| format!("frozen project file {path}"))?;
+    }
     let mut record = RunRecord {
         version: 1,
         run_id: run_dir
@@ -229,6 +234,12 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
         };
         store.prepare_action(&mut record, &action_id)?;
         worktree.verify_candidate(&checkpoint, &record.state.accepted_commit)?;
+        artifact::frozen_paths(
+            &worktree.path,
+            &worktree.baseline,
+            &checkpoint,
+            &workflow.frozen_project_files,
+        )?;
         artifact::inputs(&worktree.path, &checkpoint, stage)?;
         let review = if gate != Gate::Worker {
             let review_dir = store.root().join("reviews").join(&action_id);
@@ -256,8 +267,14 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             .join("packet.json");
         let scratch = store.reserve(&action_id)?;
         let mut plan = provider::prepare(role, gate, &prompt, cwd, &packet_path)?;
-        let guarded =
-            crate::sandbox::prepare(store.root(), cwd, &scratch, &plan.program, &plan.argv)?;
+        let guarded = crate::sandbox::prepare_with_frozen(
+            store.root(),
+            cwd,
+            &scratch,
+            &plan.program,
+            &plan.argv,
+            &workflow.frozen_project_files,
+        )?;
         if provider::requires_nested_sandbox_probe(role, gate) {
             crate::sandbox::probe_nested(&guarded)?;
         }
@@ -321,6 +338,12 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
                 .as_deref()
                 .context("candidate missing")?;
             worktree.verify_candidate(candidate, &checkpoint)?;
+            artifact::frozen_paths(
+                &worktree.path,
+                &worktree.baseline,
+                candidate,
+                &workflow.frozen_project_files,
+            )?;
             artifact::outputs(&worktree.path, candidate, stage, &snapshot)?;
         } else {
             worktree.verify_candidate(&checkpoint, &record.state.accepted_commit)?;

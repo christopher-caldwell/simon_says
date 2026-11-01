@@ -882,3 +882,46 @@ fn reset_refuses_invalid_pending_approval_before_discarding_changes() {
     .success());
     assert_eq!(fs::read_to_string(changed).unwrap(), "must be preserved");
 }
+#[test]
+fn worker_cannot_change_frozen_project_verifier() {
+    let (_tmp, p, r) = setup();
+    change_script(&p, |s| {
+        s.replace("subprocess.run([\"git\", \"add\", \"--\", path], check=True)", "Path('workflow_action.py').write_text(Path('workflow_action.py').read_text() + '\\n# changed verifier\\n')\n        subprocess.run(['git', 'add', '--', path, 'workflow_action.py'], check=True)")
+    });
+    let workflow = p.join("workflow.toml");
+    let text = fs::read_to_string(&workflow).unwrap().replacen(
+        "schema_version = 1",
+        "schema_version = 1\nfrozen_project_files = [\"workflow_action.py\"]",
+        1,
+    );
+    fs::write(&workflow, text).unwrap();
+    git(&p, &["add", "workflow.toml"]);
+    git(&p, &["commit", "-qm", "freeze verifier"]);
+    let result = run_cli(&p, &r);
+    assert!(
+        !result.status.success(),
+        "worker changed verifier but advanced"
+    );
+    assert_eq!(state(&r)["state"]["status"], "running");
+    assert!(!r.join("actions/action-1").exists());
+    let action_stderr = fs::read_to_string(r.join("actions/action-0/stderr.txt")).unwrap();
+    assert!(
+        action_stderr.contains("PermissionError")
+            || action_stderr.contains("Operation not permitted")
+    );
+}
+#[test]
+fn missing_frozen_project_file_fails_before_run_creation() {
+    let (_tmp, p, r) = setup();
+    let workflow = p.join("workflow.toml");
+    let text = fs::read_to_string(&workflow).unwrap().replacen(
+        "schema_version = 1",
+        "schema_version = 1\nfrozen_project_files = [\"missing-verifier.py\"]",
+        1,
+    );
+    fs::write(&workflow, text).unwrap();
+    git(&p, &["add", "workflow.toml"]);
+    git(&p, &["commit", "-qm", "missing verifier"]);
+    assert!(!run_cli(&p, &r).status.success());
+    assert!(!r.exists());
+}

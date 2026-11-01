@@ -15,6 +15,9 @@ pub struct Workflow {
     /// Reusable workflow purpose, included in every action packet.
     pub purpose: Option<String>,
     pub start: String,
+    /// Tracked project files whose baseline bytes and modes cannot change during a run.
+    #[serde(default)]
+    pub frozen_project_files: Vec<String>,
     pub roles: BTreeMap<String, Role>,
     pub stages: BTreeMap<String, Stage>,
 }
@@ -66,7 +69,7 @@ fn identifier(s: &str) -> bool {
         && s.bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
-fn relative(s: &str) -> Result<()> {
+pub(crate) fn validate_relative_path(s: &str) -> Result<()> {
     ensure!(
         !s.is_empty()
             && Path::new(s)
@@ -77,7 +80,7 @@ fn relative(s: &str) -> Result<()> {
     Ok(())
 }
 fn read_confined(root: &Path, name: &str) -> Result<String> {
-    relative(name)?;
+    validate_relative_path(name)?;
     let root = root
         .canonicalize()
         .context("canonicalize template directory")?;
@@ -119,6 +122,18 @@ impl Workflow {
             !w.stages.is_empty() && w.stages.contains_key(&w.start),
             "start stage does not exist"
         );
+        let mut frozen_paths = BTreeSet::new();
+        for path in &w.frozen_project_files {
+            validate_relative_path(path).context("invalid frozen project path")?;
+            ensure!(
+                !path.chars().any(|c| c.is_control()),
+                "frozen project path contains control characters"
+            );
+            ensure!(
+                frozen_paths.insert(path),
+                "duplicate frozen project path {path}"
+            );
+        }
         let mut refs = BTreeSet::new();
         for (name, role) in &w.roles {
             ensure!(identifier(name), "invalid role name {name:?}");
@@ -206,7 +221,13 @@ impl Workflow {
                 "stage {name}: at least one output is required"
             );
             for p in stage.inputs.iter().chain(stage.outputs.iter()) {
-                relative(p).with_context(|| format!("stage {name}"))?;
+                validate_relative_path(p).with_context(|| format!("stage {name}"))?;
+            }
+            for p in &stage.outputs {
+                ensure!(
+                    !frozen_paths.contains(p),
+                    "stage {name}: output {p} is a frozen project file"
+                );
             }
             refs.insert(stage.instructions.clone());
             if let Some(schema) = &stage.output_schema {

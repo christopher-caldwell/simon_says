@@ -1,0 +1,86 @@
+schema_version = 1
+name = "magic-roles-diagnostic"
+purpose = "Exercise the Investigator, Supervisor and independent Analyzer handoff on one isolated native diagnostic, without making a deck recommendation."
+start = "investigate"
+# The controller binds these tracked files to their initial Git blobs and modes.
+frozen_project_files = [
+  "workflow.toml", "diagnostic.json", "original-task.txt",
+  "investigate.md", "supervise.md", "analyze.md",
+  "design.schema.json", "collection.schema.json", "analysis.schema.json",
+  "profiles/investigator.md", "profiles/supervisor.md", "profiles/analyzer.md", "profiles/fixer.md",
+  "review.py", "native_tool.py", "runtime_source.py", "runtime_source_manifest.json", "unblock.py", "ps_compat.py",
+  "decks/angels/checkpoint_2/deck_list.csv", "decks/angels/checkpoint_2/GUIDE.md",
+  "decks/miirym/checkpoint_2/deck_list.csv", "decks/miirym/checkpoint_2/GUIDE.md",
+  "decks/azula/checkpoint_1/deck_list.csv", "decks/azula/checkpoint_1/GUIDE.md",
+  "decks/aang/checkpoint_1/deck_list.csv", "decks/aang/checkpoint_1/GUIDE.md"
+]
+
+[roles.investigator]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-terra"
+effort = "xhigh"
+profile = "profiles/investigator.md"
+timeout_seconds = 300
+[roles.supervisor]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "high"
+profile = "profiles/supervisor.md"
+timeout_seconds = 300
+[roles.analyzer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-sol"
+effort = "high"
+profile = "profiles/analyzer.md"
+timeout_seconds = 300
+# Configured and frozen for provenance, but never routed automatically.
+[roles.fixer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-terra"
+effort = "high"
+profile = "profiles/fixer.md"
+timeout_seconds = 300
+[roles.verifier]
+kind = "command"
+argv = ["python3", "-B", "review.py"]
+timeout_seconds = 120
+[roles.stop]
+kind = "command"
+argv = ["python3", "unblock.py"]
+timeout_seconds = 30
+
+[stages.investigate]
+worker = "investigator"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "investigate.md"
+inputs = ["diagnostic.json"]
+outputs = ["design.json"]
+output_schema = "design.schema.json"
+on_pass = "supervise"
+max_review_cycles = 2
+[stages.supervise]
+worker = "supervisor"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "supervise.md"
+inputs = ["design.json", "diagnostic.json", "decks/angels/checkpoint_2/deck_list.csv", "decks/angels/checkpoint_2/GUIDE.md", "decks/miirym/checkpoint_2/deck_list.csv", "decks/miirym/checkpoint_2/GUIDE.md", "decks/azula/checkpoint_1/deck_list.csv", "decks/azula/checkpoint_1/GUIDE.md", "decks/aang/checkpoint_1/deck_list.csv", "decks/aang/checkpoint_1/GUIDE.md"]
+outputs = ["collection.json"]
+output_schema = "collection.schema.json"
+on_pass = "analyze"
+max_review_cycles = 2
+[stages.analyze]
+worker = "analyzer"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "analyze.md"
+inputs = ["design.json", "collection.json"]
+outputs = ["analysis.json"]
+output_schema = "analysis.schema.json"
+on_pass = "complete"
+approval_required = true
+max_review_cycles = 2
