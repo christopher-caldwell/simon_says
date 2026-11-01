@@ -760,25 +760,6 @@ fn file_backed_prompt_still_obeys_timeout_if_child_never_reads() {
     );
 }
 #[test]
-fn claude_workers_require_nested_sandbox_probe_without_guessing_policy() {
-    use simon_says::provider::requires_nested_sandbox_probe;
-    let mut claude = role("agent", Some("claude"));
-    assert!(requires_nested_sandbox_probe(&claude, Gate::Worker));
-    claude.args = vec!["--permission-mode".into(), "acceptEdits".into()];
-    assert!(requires_nested_sandbox_probe(&claude, Gate::Worker));
-    assert!(!requires_nested_sandbox_probe(&claude, Gate::Reviewer));
-    assert!(!requires_nested_sandbox_probe(&claude, Gate::Unblocker));
-    assert!(!requires_nested_sandbox_probe(
-        &role("agent", Some("codex")),
-        Gate::Worker
-    ));
-    assert!(!requires_nested_sandbox_probe(
-        &role("command", None),
-        Gate::Worker
-    ));
-}
-
-#[test]
 fn codex_session_continuation_is_explicit_worker_only_and_identity_bound() {
     use simon_says::provider::prepare_with_session;
     let dir = tempfile::tempdir().unwrap();

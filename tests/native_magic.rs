@@ -140,12 +140,8 @@ fn fixture_host_observation_never_fabricates_java_metrics() {
         .args(["-x", "java"])
         .status()
         .unwrap();
-    let actual = Command::new("/usr/bin/sandbox-exec")
+    let actual = Command::new("python3")
         .args([
-            "-p",
-            "(version 1)(allow default)",
-            "--",
-            "python3",
             "examples/magic-native/ps_compat.py",
             "-axo",
             "pid,pcpu,rss,comm",

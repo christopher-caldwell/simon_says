@@ -295,26 +295,7 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             &packet_path,
             resume_session.as_deref(),
         )?;
-        let protected = workflow
-            .frozen_project_files
-            .iter()
-            .chain(&stage.protected_inputs)
-            .cloned()
-            .collect::<Vec<_>>();
-        let guarded = crate::sandbox::prepare_with_frozen(
-            store.root(),
-            cwd,
-            &scratch,
-            &plan.program,
-            &plan.argv,
-            &protected,
-        )?;
-        if provider::requires_nested_sandbox_probe(role, gate) {
-            crate::sandbox::probe_nested(&guarded)?;
-        }
-        plan.program = guarded.program;
-        plan.argv = guarded.argv;
-        plan.scratch = Some(guarded.scratch);
+        plan.scratch = Some(scratch);
         plan.env = scratch_env;
         let dir = store.begin(&mut record, &packet, &plan)?;
         let outcome = provider::invoke(&plan, &dir)?;

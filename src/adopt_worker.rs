@@ -176,30 +176,15 @@ pub fn adopt(
         &packet_path,
         plan.session_in.as_deref(),
     )?;
-    let protected: Vec<_> = workflow
-        .frozen_project_files
-        .iter()
-        .chain(&stage.protected_inputs)
-        .cloned()
-        .collect();
-    // Sandbox probing and later Git verification can invoke external processes
-    // or filters. Persist uncertainty before either starts. An interrupted or
+    ensure!(plan.program != "/usr/bin/sandbox-exec", "legacy sandbox-wrapped Worker records cannot be adopted by this version; preserve and reconcile the run explicitly");
+    // Git verification can invoke external processes or filters. Persist uncertainty
+    // before it starts. An interrupted or
     // failed check cannot be retried without an explicit reconciliation flag.
     if record.state.status == Status::Running {
         record.state.status = Status::AdoptionChecking;
         store.save(&record)?;
     }
-    let guarded = crate::sandbox::prepare_with_frozen(
-        store.root(),
-        &worktree.path,
-        &scratch,
-        &expected_plan.program,
-        &expected_plan.argv,
-        &protected,
-    )?;
-    expected_plan.program = guarded.program;
-    expected_plan.argv = guarded.argv;
-    expected_plan.scratch = Some(guarded.scratch);
+    expected_plan.scratch = Some(scratch);
     expected_plan.env = env;
     ensure!(
         serde_json::to_value(&plan)? == serde_json::to_value(&expected_plan)?,

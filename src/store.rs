@@ -164,7 +164,7 @@ impl RunStore {
         record.next_action = next_action;
         self.save(record)
     }
-    /// Reserve an action directory and a writable scratch area before preparing its sandbox.
+    /// Reserve an action directory and a writable scratch area before preparing its invocation.
     pub fn reserve(&self, id: &str) -> Result<PathBuf> {
         ensure!(
             !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),

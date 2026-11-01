@@ -217,6 +217,22 @@ fn managed_worktree_rejects_ignored_files_but_source_ignored_files_are_preserved
 }
 
 #[test]
+fn empty_ignored_directories_are_allowed_but_files_and_symlinks_are_not() {
+    let (_tmp, repo, run) = fixture();
+    fs::write(repo.join(".gitignore"), "cache/\n").unwrap();
+    command(&repo, &["add", ".gitignore"]);
+    command(&repo, &["commit", "-qm", "ignore cache"]);
+    let w = Worktree::create(&repo, &run).unwrap();
+    fs::create_dir_all(w.path.join("cache/nested")).unwrap();
+    w.verify_candidate(&w.baseline, &w.baseline).unwrap();
+    fs::write(w.path.join("cache/nested/data"), "not reviewed").unwrap();
+    assert!(w.verify_candidate(&w.baseline, &w.baseline).is_err());
+    fs::remove_file(w.path.join("cache/nested/data")).unwrap();
+    std::os::unix::fs::symlink("nested", w.path.join("cache/link")).unwrap();
+    assert!(w.verify_candidate(&w.baseline, &w.baseline).is_err());
+}
+
+#[test]
 fn worktree_is_not_created_inside_separate_git_common_directory() {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");

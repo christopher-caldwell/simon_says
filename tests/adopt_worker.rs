@@ -199,6 +199,22 @@ fn missing_or_forged_outcome_never_advances() {
     }
 }
 #[test]
+fn legacy_wrapped_worker_record_is_explicitly_refused_without_advancing() {
+    let (_tmp, _repo, run, candidate) = fixture();
+    preserve(&run);
+    let path = run.join("actions/action-0/invocation.json");
+    let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["program"] = Value::String("/usr/bin/sandbox-exec".into());
+    fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let result = adopt(&run, "action-0", &candidate, true);
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("legacy sandbox-wrapped Worker records")
+    );
+    assert_eq!(state(&run)["state"]["status"], "running");
+    assert!(!run.join("actions/action-1").exists());
+}
+#[test]
 fn forged_packet_or_changed_checkout_never_advances() {
     for mutation in ["packet", "invocation", "checkout"] {
         let (_tmp, _repo, run, candidate) = fixture();

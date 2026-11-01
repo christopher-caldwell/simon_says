@@ -290,8 +290,44 @@ fn clean(repo: &Path) -> Result<()> {
 // An ignored file in a managed checkout is not part of the Git candidate,
 // but a later Worker could still read or execute it. Reviewers get a fresh
 // checkout and therefore could not inspect those bytes. Reject all ignored
-// content in managed worktrees; never apply this rule to the user's source
+// content in managed worktrees. Empty directory trees carry no candidate bytes
+// and are permitted; never apply this rule to the user's source
 // checkout, where ignored files are expected and remain untouched.
+fn only_empty_ignored_directories(repo: &Path, status: &[u8]) -> Result<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut examined = 0usize;
+    for entry in status.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+        let Some(name) = entry.strip_prefix(b"!! ") else {
+            return Ok(false);
+        };
+        let relative = Path::new(std::ffi::OsStr::from_bytes(name));
+        let mut path = repo.to_path_buf();
+        for component in relative.components() {
+            let std::path::Component::Normal(part) = component else {
+                return Ok(false);
+            };
+            path.push(part);
+            let meta = std::fs::symlink_metadata(&path)?;
+            if !meta.is_dir() || meta.file_type().is_symlink() {
+                return Ok(false);
+            }
+        }
+        let mut pending = vec![path];
+        while let Some(dir) = pending.pop() {
+            examined += 1;
+            ensure!(examined <= 4096, "too many ignored directories to verify");
+            for item in std::fs::read_dir(dir)? {
+                let item = item?;
+                let meta = std::fs::symlink_metadata(item.path())?;
+                if !meta.is_dir() || meta.file_type().is_symlink() {
+                    return Ok(false);
+                }
+                pending.push(item.path());
+            }
+        }
+    }
+    Ok(true)
+}
 fn clean_managed(repo: &Path) -> Result<()> {
     clean(repo)?;
     let output = git(
@@ -306,7 +342,7 @@ fn clean_managed(repo: &Path) -> Result<()> {
         ],
     )?;
     ensure!(
-        output.stdout.is_empty(),
+        only_empty_ignored_directories(repo, &output.stdout)?,
         "managed worktree contains ignored or untracked files; preserve them and reconcile explicitly"
     );
     Ok(())
@@ -668,13 +704,14 @@ impl Worktree {
             &[
                 "status",
                 "--porcelain=v1",
+                "-z",
                 "--untracked-files=all",
                 "--ignored=matching",
                 "--ignore-submodules=none",
             ],
         )?;
         ensure!(
-            status.stdout.is_empty(),
+            only_empty_ignored_directories(&self.path, &status.stdout)?,
             "review checkout has tracked, untracked or ignored changes"
         );
         Ok(())

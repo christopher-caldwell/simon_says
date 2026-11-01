@@ -2,6 +2,7 @@
 
 use std::{
     fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -62,6 +63,79 @@ fn actual_two_stage_run_completes_and_reviews_exact_candidates() {
         assert!(r.join(format!("actions/action-{id}/outcome.json")).exists());
     }
     assert!(!p.join("validation.json").exists());
+}
+#[test]
+fn claude_worker_launches_directly_and_reviewer_inspects_its_candidate() {
+    let (tmp, project, run) = setup();
+    let bin = tmp.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let fake = bin.join("claude");
+    fs::write(&fake, r##"#!/usr/bin/env python3
+import json, subprocess, sys
+sys.stdin.read()
+result = subprocess.run(['python3', '-B', 'workflow_action.py'], check=True, capture_output=True, text=True)
+print(json.dumps({'type':'result','subtype':'success','is_error':False,'result':result.stdout.strip()}))
+"##).unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = project.join("workflow.toml");
+    let source = fs::read_to_string(&path).unwrap().replace(
+        "[roles.worker]\nkind = \"command\"\nargv = [\"python3\", \"workflow_action.py\"]",
+        "[roles.worker]\nkind = \"agent\"\nadapter = \"claude\"\nprofile = \"worker-profile.md\"",
+    );
+    assert!(source.contains("adapter = \"claude\""));
+    fs::write(&path, source).unwrap();
+    fs::write(
+        project.join("worker-profile.md"),
+        "Fixture Worker profile\n",
+    )
+    .unwrap();
+    git(&project, &["add", "workflow.toml", "worker-profile.md"]);
+    git(&project, &["commit", "-qm", "use fake Claude worker"]);
+    let search_path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let output = Command::new(env!("CARGO_BIN_EXE_simon-says"))
+        .args([
+            "run",
+            path.to_str().unwrap(),
+            "--project",
+            project.to_str().unwrap(),
+            "--run-dir",
+            run.to_str().unwrap(),
+        ])
+        .env("PATH", search_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(record["state"]["status"], "complete");
+    for (worker, reviewer) in [(0, 1), (2, 3)] {
+        let action = run.join(format!("actions/action-{worker}"));
+        let plan: serde_json::Value =
+            serde_json::from_slice(&fs::read(action.join("invocation.json")).unwrap()).unwrap();
+        assert_eq!(plan["program"], "claude");
+        assert_eq!(
+            plan["scratch"],
+            action
+                .join("scratch")
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+        let outcome: serde_json::Value =
+            serde_json::from_slice(&fs::read(action.join("outcome.json")).unwrap()).unwrap();
+        let response: serde_json::Value =
+            serde_json::from_str(outcome["response"].as_str().unwrap()).unwrap();
+        let packet: serde_json::Value = serde_json::from_slice(
+            &fs::read(run.join(format!("actions/action-{reviewer}/packet.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(packet["gate"], "reviewer");
+        assert_eq!(packet["candidate_commit"], response["candidate_commit"]);
+    }
 }
 #[test]
 fn provider_failure_remains_uncertain_until_explicit_reset() {
@@ -234,9 +308,8 @@ fn live_authority_or_state_mutation_is_detected_and_running_state_restored() {
     let result = run_cli(&p, &r);
     assert!(!result.status.success());
     assert_eq!(state(&r)["state"]["status"], "running");
-    assert!(String::from_utf8_lossy(&result.stderr).contains("failed with exit"));
-    let stderr = fs::read_to_string(r.join("actions/action-0/stderr.txt")).unwrap();
-    assert!(stderr.contains("PermissionError") || stderr.contains("Operation not permitted"));
+    assert!(String::from_utf8_lossy(&result.stderr)
+        .contains("run authority or state changed during action"));
     assert!(!cli(&["resume", r.to_str().unwrap()]).status.success());
 }
 #[test]
@@ -675,28 +748,6 @@ fn approval_refuses_dirty_or_replaced_checkout() {
     .success());
 }
 #[test]
-fn claude_worker_nested_sandbox_failure_stops_before_invocation() {
-    let (_tmp, p, r) = setup();
-    let workflow = p.join("workflow.toml");
-    let source = fs::read_to_string(&workflow).unwrap().replace(
-        "[roles.worker]\nkind = \"command\"\nargv = [\"python3\", \"workflow_action.py\"]",
-        "[roles.worker]\nkind = \"agent\"\nadapter = \"claude\"\nprofile = \"worker-profile.md\"",
-    );
-    fs::write(&workflow, source).unwrap();
-    fs::write(p.join("worker-profile.md"), "Work profile").unwrap();
-    git(&p, &["add", "workflow.toml", "worker-profile.md"]);
-    git(&p, &["commit", "-qm", "claude worker"]);
-    let result = run_cli(&p, &r);
-    assert!(!result.status.success());
-    let s = state(&r);
-    assert_eq!(s["state"]["status"], "preparing");
-    assert!(!r.join("actions/action-0/invocation.json").exists());
-    assert!(!r.join("actions/action-0/stdout.txt").exists());
-    assert!(String::from_utf8_lossy(&result.stderr)
-        .to_ascii_lowercase()
-        .contains("sandbox"));
-}
-#[test]
 fn approval_challenge_cannot_be_replayed_for_same_commit_in_later_stage() {
     let (_tmp, p, r) = setup();
     change_script(&p, |s| {
@@ -925,11 +976,10 @@ fn worker_cannot_change_frozen_project_verifier() {
     );
     assert_eq!(state(&r)["state"]["status"], "running");
     assert!(!r.join("actions/action-1").exists());
-    let action_stderr = fs::read_to_string(r.join("actions/action-0/stderr.txt")).unwrap();
-    assert!(
-        action_stderr.contains("PermissionError")
-            || action_stderr.contains("Operation not permitted")
-    );
+    assert!(String::from_utf8_lossy(&result.stderr).contains("frozen authority file changed"));
+    assert!(fs::read_to_string(r.join("worktree/workflow_action.py"))
+        .unwrap()
+        .contains("# changed verifier"));
 }
 #[test]
 fn missing_frozen_project_file_fails_before_run_creation() {

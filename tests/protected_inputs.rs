@@ -81,7 +81,7 @@ fn stage_protects_prior_reviewed_output_and_stops_before_repair_review() {
     let output = run(&repo, &run_dir);
     assert!(
         !output.status.success(),
-        "writing a protected input must fail"
+        "a candidate changing a protected input must be rejected"
     );
     let state = json(&run_dir.join("state.json"));
     assert_eq!(state["state"]["status"], "running");
@@ -91,9 +91,10 @@ fn stage_protects_prior_reviewed_output_and_stops_before_repair_review() {
         json(&run_dir.join("actions/action-2/packet.json"))["protected_inputs"],
         serde_json::json!(["simulation.json"])
     );
-    assert!(json(&run_dir.join("worktree/simulation.json"))
-        .get("tampered")
-        .is_none());
+    assert_eq!(
+        json(&run_dir.join("worktree/simulation.json"))["tampered"],
+        true
+    );
     assert!(!run_dir.join("actions/action-3").exists());
     let resumed = cli(&["resume", run_dir.to_str().unwrap()]);
     assert!(

@@ -12,7 +12,7 @@ simon-says run /absolute/new/project/workflow.toml --project /absolute/new/proje
 simon-says status /absolute/new/run
 ```
 
-The action sandbox owns runtime stores and game evidence. Git reset cannot undo external effects: after interruption, do not replay an uncertain build or game without explicit recovery. Native setup can require 10–20 minutes and several gigabytes per build; online provider authentication and offline-cached Cargo dependencies are required. This is a small experimental workflow, not a production comparative study. Some same-user IPC and native process behaviors remain outside the filesystem guard.
+Each action has its own scratch space for runtime stores and game evidence. Git reset cannot undo external effects: after interruption, do not replay an uncertain build or game without explicit recovery. Native setup can require 10–20 minutes and several gigabytes per build; online provider authentication and offline-cached Cargo dependencies are required. This is a small experimental workflow, not a production comparative study. Actions run with the invoking user’s permissions.
 
 ## Recorded end-to-end run
 

@@ -917,9 +917,3 @@ fn content_text(value: Option<&Value>) -> Option<String> {
         _ => None,
     }
 }
-
-/// Claude Worker policy may require its own Bash sandbox, including via merged
-/// user settings. Do not guess its effective permissions or disable a sandbox.
-pub fn requires_nested_sandbox_probe(role: &Role, gate: Gate) -> bool {
-    role.kind == "agent" && role.adapter.as_deref() == Some("claude") && gate == Gate::Worker
-}
