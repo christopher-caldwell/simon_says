@@ -53,6 +53,7 @@
 | Resume valid ready state | Starts correct next action without consulting chat history |
 | Reset | Verifies controlled worktree and checkpoint before destructive action; refuses unsafe checkout |
 | Unknown external side effect during crash | Does not claim rollback or automatically replay without operator decision |
+| Git filter or checkout hangs | Bounded process-group timeout; preflight reports no run was created, while interrupted checkout/action remains durably uncertain and is never replayed automatically |
 
 ## Regression and proof of generality
 

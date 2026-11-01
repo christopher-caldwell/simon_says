@@ -6,9 +6,8 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Command, Output},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,10 +80,8 @@ fn git_command(repo: &Path) -> Command {
     cmd
 }
 fn git(repo: &Path, args: &[&str]) -> Result<Output> {
-    let output = git_command(repo)
-        .args(args)
-        .output()
-        .context("execute git")?;
+    let output =
+        crate::git_process::run(git_command(repo).args(args), None).context("execute git")?;
     ensure!(
         output.status.success(),
         "git {:?} failed: {}",
@@ -242,34 +239,23 @@ fn verify_tracked_contents(repo: &Path) -> Result<()> {
             _ => bail!("unsupported tracked file mode {mode} for {path}"),
         }
     }
-    // Bound batches and write stdin concurrently so even a noisy custom clean
-    // filter cannot deadlock against the captured stdout or stderr pipes.
+    // Bound batches. File-backed input/output in the shared Git runner avoids
+    // deadlock and places a deadline on configured clean filters.
     for chunk in batch.chunks(128) {
-        let mut child = git_command(repo)
-            .args(["hash-object", "--stdin-paths"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("start git hash-object")?;
-        let mut stdin = child.stdin.take().context("git hash stdin missing")?;
         let input = chunk
             .iter()
             .map(|(path, _)| format!("{path}\n"))
             .collect::<String>();
-        let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
-        let output = child
-            .wait_with_output()
-            .context("wait for git hash-object")?;
-        let write_result = writer
-            .join()
-            .map_err(|_| anyhow::anyhow!("git hash input writer panicked"))?;
+        let output = crate::git_process::run(
+            git_command(repo).args(["hash-object", "--stdin-paths"]),
+            Some(input.as_bytes()),
+        )
+        .context("git hash-object")?;
         ensure!(
             output.status.success(),
             "git hash-object failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        write_result.context("write git hash input")?;
         let hashes = std::str::from_utf8(&output.stdout).context("invalid git hash output")?;
         let mut actual = hashes.lines();
         for (path, oid) in chunk {

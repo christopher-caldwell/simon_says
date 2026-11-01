@@ -1,9 +1,6 @@
 #![cfg(target_os = "macos")]
 
-pub use simon_says::{git, provider, routing, store};
-#[path = "../src/cleanup.rs"]
-mod cleanup;
-use cleanup::cleanup_reviews;
+use simon_says::cleanup::cleanup_reviews;
 use simon_says::{controller, routing::Status};
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 use std::{

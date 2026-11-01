@@ -20,7 +20,7 @@ fn git(repo: &Path, args: &[&str]) -> Result<Vec<u8>> {
     ] {
         command.env_remove(key);
     }
-    let output = command.output().context("start git")?;
+    let output = crate::git_process::run(&mut command, None).context("run git")?;
     ensure!(
         output.status.success(),
         "git {} failed: {}",

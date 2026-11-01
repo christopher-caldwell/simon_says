@@ -25,7 +25,9 @@ pub fn initialize_with_context(
         snapshot = snapshot.with_context(path)?;
     }
     let workflow: Workflow = toml::from_str(&snapshot.template)?;
-    let intent = InitializationIntent::capture(project, run_dir)?;
+    let intent = InitializationIntent::capture(project, run_dir).context(
+        "initialization preflight failed before creating a run record; Git filters may have caused external effects",
+    )?;
     // Fail before creating a run if declared project authority is absent or unsafe.
     for path in &workflow.frozen_project_files {
         artifact::tracked_blob(&intent.source, &intent.baseline, path)

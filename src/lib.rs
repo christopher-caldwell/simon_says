@@ -532,6 +532,8 @@ pub fn template_path(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+mod git_process;
+
 pub mod routing;
 
 pub mod store;

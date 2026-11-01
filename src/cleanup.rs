@@ -27,7 +27,7 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
     ] {
         command.env_remove(key);
     }
-    let output = command.output().context("start git")?;
+    let output = crate::git_process::run(&mut command, None).context("run git worktree cleanup")?;
     ensure!(
         output.status.success(),
         "git worktree cleanup failed: {}",
