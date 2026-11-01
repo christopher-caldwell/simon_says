@@ -257,3 +257,29 @@ fn session_continuation_is_opt_in_and_valid_only_for_non_ephemeral_codex_agents(
         assert!(Workflow::parse_and_validate(&bad, d.path()).is_err());
     }
 }
+
+#[test]
+fn command_role_errors_identify_agent_only_fields() {
+    let (root, base) = setup();
+    for (field, value) in [
+        ("adapter", "\"codex\""),
+        ("model", "\"example-model\""),
+        ("effort", "\"low\""),
+        ("profile", "\"reviewer.md\""),
+        ("args", "[\"--example\"]"),
+    ] {
+        let text = base.replace(
+            "argv = [\"./worker\"]",
+            &format!("argv = [\"./worker\"]\n{field} = {value}"),
+        );
+        let error = Workflow::parse_and_validate(&text, root.path()).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("role worker") && message.contains(field),
+            "{message}"
+        );
+    }
+    let empty = base.replace("argv = [\"./worker\"]", "argv = []");
+    let error = Workflow::parse_and_validate(&empty, root.path()).unwrap_err();
+    assert!(format!("{error:#}").contains("nonempty argv"));
+}

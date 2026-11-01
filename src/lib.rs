@@ -265,16 +265,24 @@ impl Workflow {
                 );
             }
             match role.kind.as_str() {
-                "command" => ensure!(
-                    !role.argv.is_empty()
-                        && !role.argv[0].is_empty()
-                        && role.adapter.is_none()
-                        && role.model.is_none()
-                        && role.effort.is_none()
-                        && role.profile.is_none()
-                        && role.args.is_empty(),
-                    "invalid command role {name}"
-                ),
+                "command" => {
+                    ensure!(
+                        !role.argv.is_empty() && !role.argv[0].is_empty(),
+                        "role {name}: command requires a nonempty argv array and program"
+                    );
+                    for (field, present) in [
+                        ("adapter", role.adapter.is_some()),
+                        ("model", role.model.is_some()),
+                        ("effort", role.effort.is_some()),
+                        ("profile", role.profile.is_some()),
+                        ("args", !role.args.is_empty()),
+                    ] {
+                        ensure!(
+                            !present,
+                            "role {name}: command must omit agent-only field {field}; use argv for command arguments"
+                        );
+                    }
+                }
                 "agent" => {
                     ensure!(
                         matches!(role.adapter.as_deref(), Some("codex" | "claude")),
