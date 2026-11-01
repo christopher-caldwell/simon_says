@@ -1,0 +1,48 @@
+schema_version = 1
+name = "magic-real-evidence-repair"
+purpose = "Exercise automatic route from preserved real game evidence and a real engine regression to a configured Fixer, then recheck. No new games."
+start = "observe"
+max_stage_transitions = 4
+frozen_project_files = ["workflow.toml", "simon-dynamic/probe.py", "simon-dynamic/observe.py", "simon-dynamic/review.py", "simon-dynamic/stop.py", "simon-dynamic/observe.md", "simon-dynamic/repair.md", "simon-dynamic/finding.schema.json", "simon-dynamic/repair.schema.json", "simon-dynamic/evidence.json", "simon-repair/profile.md", "manabrew-rs/crates/manabrew-engine/tests/left_battlefield_this_turn.rs", "manabrew-rs/crates/manabrew-engine/tests/bottom_departure.rs", "manabrew-rs/crates/manabrew-engine/tests/prevented_zone_move.rs"]
+[roles.observer]
+kind = "command"
+argv = ["python3", "-B", "simon-dynamic/observe.py"]
+timeout_seconds = 1800
+[roles.fixer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-terra"
+effort = "high"
+profile = "simon-repair/profile.md"
+timeout_seconds = 1800
+[roles.verifier]
+kind = "command"
+argv = ["python3", "-B", "simon-dynamic/review.py"]
+timeout_seconds = 1800
+[roles.stop]
+kind = "command"
+argv = ["python3", "-B", "simon-dynamic/stop.py"]
+timeout_seconds = 30
+[stages.observe]
+worker = "observer"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-dynamic/observe.md"
+inputs = ["simon-dynamic/evidence.json"]
+outputs = ["finding.json"]
+output_schema = "simon-dynamic/finding.schema.json"
+on_pass = "complete"
+max_review_cycles = 2
+[stages.observe.routes]
+issues = "repair"
+clean = "complete"
+[stages.repair]
+worker = "fixer"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-dynamic/repair.md"
+inputs = ["finding.json", "simon-dynamic/evidence.json"]
+outputs = ["repair.json"]
+output_schema = "simon-dynamic/repair.schema.json"
+on_pass = "observe"
+max_review_cycles = 2

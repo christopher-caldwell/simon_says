@@ -1,0 +1,1 @@
+Run the isolated historical-engine regression and report its observed mechanical result. This is replay of a focused engine reproduction grounded in earlier retained game evidence; it does not launch a new deck game. Do not modify engine code or claim runtime acceptance.

@@ -1,0 +1,1 @@
+{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":false,"required":["kind","issue_id","verification_log_sha256","evidence"],"properties":{"kind":{"enum":["issues","clean"]},"issue_id":{"const":"MAGIC-LEFT-BATTLEFIELD"},"verification_log_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"evidence":{"type":"string","minLength":1}}}
