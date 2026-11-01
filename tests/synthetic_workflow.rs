@@ -1,3 +1,5 @@
+#![cfg(target_os = "macos")]
+
 use serde_json::{json, Value};
 use std::{
     fs,

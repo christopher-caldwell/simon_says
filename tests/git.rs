@@ -107,3 +107,89 @@ fn hidden_index_flags_cannot_disguise_dirty_worker() {
     assert!(w.verify_clean().is_err());
     assert!(w.reset_to(&w.baseline).is_err());
 }
+#[test]
+fn detects_tracked_content_changed_with_cached_stat_metadata() {
+    use std::time::Duration;
+    let (_tmp, repo, run) = fixture();
+    command(&repo, &["config", "core.trustctime", "false"]);
+    let w = Worktree::create(&repo, &run).unwrap();
+    std::thread::sleep(Duration::from_millis(1200));
+    command(&w.path, &["update-index", "--refresh"]);
+    let path = w.path.join("data");
+    let original = fs::metadata(&path).unwrap().modified().unwrap();
+    fs::write(&path, "changed!").unwrap(); // same length as "baseline"
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(original))
+        .unwrap();
+    assert_eq!(
+        command(&w.path, &["status", "--porcelain"]),
+        "",
+        "fixture must exercise Git stat-cache evasion"
+    );
+    assert!(w.verify_candidate(&w.baseline, &w.baseline).is_err());
+}
+#[test]
+fn verifies_filtered_checkout_contents_using_git_clean_filter() {
+    let (_tmp, repo, run) = fixture();
+    command(&repo, &["config", "filter.test.clean", "tr A-Z a-z"]);
+    command(&repo, &["config", "filter.test.smudge", "tr a-z A-Z"]);
+    fs::write(repo.join(".gitattributes"), "filtered filter=test\n").unwrap();
+    fs::write(repo.join("filtered"), "lowercase\n").unwrap();
+    command(&repo, &["add", ".gitattributes", "filtered"]);
+    command(&repo, &["commit", "-qm", "filtered file"]);
+    let w = Worktree::create(&repo, &run).unwrap();
+    assert_eq!(
+        fs::read_to_string(w.path.join("filtered")).unwrap(),
+        "LOWERCASE\n"
+    );
+    w.verify_candidate(&w.baseline, &w.baseline).unwrap();
+}
+#[cfg(unix)]
+#[test]
+fn validates_tracked_symlink_and_executable_mode() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let (_tmp, repo, run) = fixture();
+    symlink("data", repo.join("link")).unwrap();
+    fs::write(repo.join("script"), "#!/bin/sh\n").unwrap();
+    fs::set_permissions(repo.join("script"), fs::Permissions::from_mode(0o755)).unwrap();
+    command(&repo, &["add", "link", "script"]);
+    command(&repo, &["commit", "-qm", "modes"]);
+    let w = Worktree::create(&repo, &run).unwrap();
+    w.verify_candidate(&w.baseline, &w.baseline).unwrap();
+    fs::set_permissions(w.path.join("script"), fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(w.verify_clean().is_err());
+}
+#[test]
+fn hashes_batched_and_quoted_paths_without_confusion() {
+    let (_tmp, repo, run) = fixture();
+    for name in [
+        "a space",
+        "tab\tname",
+        "-dash",
+        "newline\nname",
+        "quote\"name",
+        "back\\slash",
+    ] {
+        fs::write(repo.join(name), format!("contents: {name}")).unwrap();
+    }
+    command(&repo, &["add", "--all"]);
+    command(&repo, &["commit", "-qm", "odd filenames"]);
+    let w = Worktree::create(&repo, &run).unwrap();
+    w.verify_candidate(&w.baseline, &w.baseline).unwrap();
+}
+#[test]
+fn verifies_all_batches_of_tracked_files() {
+    let (_tmp, repo, run) = fixture();
+    for n in 0..260 {
+        fs::write(repo.join(format!("file-{n:03}")), format!("value-{n:03}")).unwrap();
+    }
+    command(&repo, &["add", "--all"]);
+    command(&repo, &["commit", "-qm", "multiple batches"]);
+    let w = Worktree::create(&repo, &run).unwrap();
+    w.verify_candidate(&w.baseline, &w.baseline).unwrap();
+    fs::write(w.path.join("file-255"), "different").unwrap();
+    assert!(w.verify_candidate(&w.baseline, &w.baseline).is_err());
+}

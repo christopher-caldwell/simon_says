@@ -1,3 +1,5 @@
+#![cfg(target_os = "macos")]
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -192,7 +194,7 @@ fn killed_controller_never_replays_running_action() {
     };
     let (_tmp, p, r) = setup();
     change_script(&p, |_| {
-        "import os,time\nfrom pathlib import Path\np=Path(os.environ['SIMON_PACKET']).parent\n(p/'started').write_text('yes')\ntime.sleep(2)\n(p/'finished').write_text('yes')\n".into()
+        "import os,time\nfrom pathlib import Path\np=Path(os.environ['SIMON_SCRATCH'])\n(p/'started').write_text('yes')\ntime.sleep(2)\n(p/'finished').write_text('yes')\n".into()
     });
     let mut child = Command::new(env!("CARGO_BIN_EXE_simon-says"))
         .args([
@@ -206,14 +208,14 @@ fn killed_controller_never_replays_running_action() {
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(15);
-    let marker = r.join("actions/action-0/started");
+    let marker = r.join("actions/action-0/scratch/started");
     while !marker.exists() {
         assert!(Instant::now() < deadline, "action did not start");
         thread::sleep(Duration::from_millis(20));
     }
     child.kill().unwrap();
     child.wait().unwrap();
-    let finished = r.join("actions/action-0/finished");
+    let finished = r.join("actions/action-0/scratch/finished");
     let deadline = Instant::now() + Duration::from_secs(10);
     while !finished.exists() {
         assert!(Instant::now() < deadline);
@@ -231,8 +233,10 @@ fn live_authority_or_state_mutation_is_detected_and_running_state_restored() {
     });
     let result = run_cli(&p, &r);
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("authority or state changed"));
     assert_eq!(state(&r)["state"]["status"], "running");
+    assert!(String::from_utf8_lossy(&result.stderr).contains("failed with exit"));
+    let stderr = fs::read_to_string(r.join("actions/action-0/stderr.txt")).unwrap();
+    assert!(stderr.contains("PermissionError") || stderr.contains("Operation not permitted"));
     assert!(!cli(&["resume", r.to_str().unwrap()]).status.success());
 }
 #[test]
@@ -265,11 +269,120 @@ fn pre_action_failure_is_durable_and_not_repeated_on_resume() {
     git(&p, &["commit", "-qm", "remove input"]);
     assert!(!run_cli(&p, &r).status.success());
     let s = state(&r);
-    assert_eq!(s["state"]["status"], "stopped");
+    assert_eq!(s["state"]["status"], "preparing");
+    assert_eq!(s["state"]["action_id"], "action-0");
+    assert_eq!(s["next_action"], 1);
     assert!(s["state"]["stop_reason"]
         .as_str()
         .unwrap()
         .contains("input"));
     assert!(!cli(&["resume", r.to_str().unwrap()]).status.success());
     assert!(!r.join("actions/action-0").exists());
+}
+#[test]
+fn action_timeout_is_durable_and_does_not_replay() {
+    let (_tmp, p, r) = setup();
+    let workflow = p.join("workflow.toml");
+    let t = fs::read_to_string(&workflow).unwrap().replacen(
+        "kind = \"command\"",
+        "kind = \"command\"\ntimeout_seconds = 1",
+        1,
+    );
+    fs::write(&workflow, t).unwrap();
+    fs::write(
+        p.join("workflow_action.py"),
+        "import time\ntime.sleep(30)\n",
+    )
+    .unwrap();
+    git(&p, &["add", "workflow.toml", "workflow_action.py"]);
+    git(&p, &["commit", "-qm", "timeout fixture"]);
+    let result = run_cli(&p, &r);
+    assert!(!result.status.success());
+    let s = state(&r);
+    assert_eq!(s["state"]["status"], "running");
+    assert!(s["state"]["stop_reason"]
+        .as_str()
+        .unwrap()
+        .contains("timed out"));
+    assert!(r.join("actions/action-0/process.json").exists());
+    assert!(!cli(&["resume", r.to_str().unwrap()]).status.success());
+}
+#[test]
+fn killed_during_review_checkout_requires_explicit_recovery() {
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
+    let (_tmp, p, r) = setup();
+    let marker = p.parent().unwrap().join("review-filter-started");
+    let done = p.parent().unwrap().join("review-filter-done");
+    let script = p.join("review-filter.sh");
+    fs::write(&script, format!("#!/bin/sh\ncase \"$(pwd)\" in */reviews/*) printf started > '{}'; sleep 3; cat; printf done > '{}'; exit 0;; esac\ncat\n", marker.display(), done.display())).unwrap();
+    fs::write(
+        p.join(".gitattributes"),
+        "input.json filter=reviewfixture\n",
+    )
+    .unwrap();
+    git(
+        &p,
+        &[
+            "config",
+            "filter.reviewfixture.smudge",
+            &format!("sh {}", script.display()),
+        ],
+    );
+    git(&p, &["add", ".gitattributes", "review-filter.sh"]);
+    git(&p, &["commit", "-qm", "review filter"]);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_simon-says"))
+        .args([
+            "run",
+            p.join("workflow.toml").to_str().unwrap(),
+            "--project",
+            p.to_str().unwrap(),
+            "--run-dir",
+            r.to_str().unwrap(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(25);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline, "review filter did not start");
+        thread::sleep(Duration::from_millis(20));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !done.exists() {
+        assert!(Instant::now() < deadline, "orphan checkout did not finish");
+        thread::sleep(Duration::from_millis(20));
+    }
+    thread::sleep(Duration::from_millis(500));
+    let s = state(&r);
+    assert_eq!(s["state"]["status"], "preparing");
+    assert_eq!(s["state"]["action_id"], "action-1");
+    assert_eq!(s["next_action"], 2);
+    let result = cli(&["resume", r.to_str().unwrap()]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("preparation is uncertain"));
+    assert!(!cli(&["reset", r.to_str().unwrap()]).status.success());
+    let orphan = r.join("reviews/action-1/worktree");
+    let orphan_exists = orphan.exists();
+    // Git may remove its incomplete checkout after the killed parent closes pipes.
+    // Recovery must not remove anything that remains in the review directory.
+    let evidence = r.join("reviews/action-1/preserve-evidence");
+    fs::write(&evidence, "keep").unwrap();
+    assert!(cli(&[
+        "reset",
+        r.to_str().unwrap(),
+        "--acknowledge-external-effects"
+    ])
+    .status
+    .success());
+    if orphan_exists {
+        assert!(orphan.exists(), "recovery removed orphan checkout");
+    }
+    assert_eq!(fs::read_to_string(evidence).unwrap(), "keep");
+    assert_eq!(state(&r)["state"]["status"], "ready");
 }

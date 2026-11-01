@@ -126,3 +126,14 @@ fn rejects_symlinked_template() {
     std::os::unix::fs::symlink("real.toml", d.path().join("link.toml")).unwrap();
     assert!(Snapshot::create(&d.path().join("link.toml")).is_err());
 }
+#[test]
+fn rejects_unbounded_action_timeouts() {
+    let (d, t) = setup();
+    for seconds in [0, 86401] {
+        let bad = t.replace(
+            "kind = \"command\"",
+            &format!("kind = \"command\"\ntimeout_seconds = {seconds}"),
+        );
+        assert!(Workflow::parse_and_validate(&bad, d.path()).is_err());
+    }
+}

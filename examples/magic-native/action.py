@@ -2,6 +2,7 @@
 """Run a bounded existing Manabrew native diagnostic in an isolated action store."""
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -22,8 +23,17 @@ def reply(packet, outcome, report, candidate=None, inspected=None):
 
 
 def invoke(cli, store, *args):
+    # Use a narrow, fail-closed process-observation shim: the system ps binary
+    # is setuid and cannot execute inside macOS sandbox-exec.
+    shim_dir = Path(os.environ["SIMON_SCRATCH"]) / "diagnostic-bin"
+    shim_dir.mkdir(exist_ok=True)
+    shim = shim_dir / "ps"
+    shutil.copyfile(Path(__file__).with_name("ps_compat.py"), shim)
+    shim.chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
     process = subprocess.run([str(cli), "--local", str(store), *args], text=True,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90)
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90, env=env)
     if process.returncode:
         raise RuntimeError(f"native simulator exited {process.returncode}: {process.stderr[-2000:]}")
     return json.loads(process.stdout)
@@ -48,7 +58,7 @@ def main():
             reply(packet, "blocked", "Exercise a recoverable preflight blocker before simulation.")
             return
         revision = 2 if any("revision 2" in item for item in feedback) else 1
-        store = packet_path.parent / "native-store"
+        store = Path(os.environ["SIMON_SCRATCH"]) / "native-store"
         store.mkdir()
         shutil.copyfile(runtime_root / "store/runtime.json", store / "runtime.json")
         result = invoke(cli, store, "run", "--config", str(Path("diagnostic.json").resolve()), "--repo", str(Path.cwd()))
@@ -63,7 +73,30 @@ def main():
         head = git("rev-parse", "HEAD")
         if stage == "simulate":
             simulation = load("simulation.json")
-            verification = invoke(cli, Path(simulation["store"]), "verify", "--run", simulation["run"])
+            # The collector records absolute attempt paths and refuses silently
+            # relocated stores. Copy the database into this action's writable
+            # scratch, but explicitly point attempt directories at the original
+            # protected evidence; the unchanged verifier checks those hashes.
+            original_store = Path(simulation["store"]).resolve(strict=True)
+            actions_dir = packet_path.parents[1].resolve(strict=True)
+            if not original_store.is_relative_to(actions_dir):
+                raise ValueError("simulation store is outside this run's actions")
+            run_id = simulation["run"]
+            if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", run_id):
+                raise ValueError("invalid simulation run identity")
+            verification_store = Path(os.environ["SIMON_SCRATCH"]) / "verification-store"
+            shutil.copytree(original_store, verification_store)
+            original_attempts = original_store / "runs" / run_id / "attempts"
+            copied_attempts = verification_store / "runs" / run_id / "attempts"
+            for source in original_attempts.iterdir():
+                if source.is_symlink() or not source.is_dir():
+                    raise ValueError("unexpected original attempt path")
+                destination = copied_attempts / source.name
+                if destination.is_symlink() or not destination.is_dir():
+                    raise ValueError("unexpected copied attempt path")
+                shutil.rmtree(destination)
+                destination.symlink_to(source.resolve(strict=True), target_is_directory=True)
+            verification = invoke(cli, verification_store, "verify", "--run", run_id)
             if verification.get("verified") != 1 or verification.get("eligibleGames") != 1:
                 raise RuntimeError("native verification did not find one eligible verified game")
             if simulation["revision"] < 2:

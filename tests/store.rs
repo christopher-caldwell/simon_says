@@ -24,6 +24,7 @@ fn init() -> (tempfile::TempDir, RunRecord, RunStore) {
 fn running_is_persisted_before_invocation_and_restart_does_not_replay() {
     let (_tmp, mut record, store) = init();
     let packet = serde_json::json!({"action_id":"action-0"});
+    store.prepare_action(&mut record, "action-0").unwrap();
     let dir = store
         .begin(
             &mut record,
@@ -57,4 +58,33 @@ fn existing_run_is_never_overwritten() {
     let root = store.root().to_owned();
     let s = Snapshot::create(Path::new("examples/basic/workflow.toml")).unwrap();
     assert!(RunStore::create(&root, &s, &record).is_err());
+}
+#[test]
+fn preparation_is_durable_and_matching_identity_starts_once() {
+    let (_tmp, mut record, store) = init();
+    store.prepare_action(&mut record, "action-0").unwrap();
+    assert_eq!(record.state.status, Status::Preparing);
+    assert_eq!(record.next_action, 1);
+    let root = store.root().to_owned();
+    drop(store);
+    let store = RunStore::open(&root).unwrap();
+    let (mut loaded, _) = store.load().unwrap();
+    assert_eq!(loaded.state.action_id.as_deref(), Some("action-0"));
+    assert!(RunStore::check_resumable(&loaded).is_err());
+    assert!(store
+        .begin(
+            &mut loaded,
+            &serde_json::json!({"action_id":"action-1"}),
+            &serde_json::json!({})
+        )
+        .is_err());
+    store
+        .begin(
+            &mut loaded,
+            &serde_json::json!({"action_id":"action-0"}),
+            &serde_json::json!({}),
+        )
+        .unwrap();
+    assert_eq!(loaded.state.status, Status::Running);
+    assert_eq!(loaded.next_action, 1);
 }

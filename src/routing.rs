@@ -15,6 +15,7 @@ pub enum Gate {
 pub enum Status {
     Initializing,
     Ready,
+    Preparing,
     Running,
     Stopped,
     Complete,
@@ -60,8 +61,10 @@ impl State {
     }
     pub fn start(&mut self, action_id: String) -> Result<()> {
         ensure!(
-            self.status == Status::Ready,
-            "action can only start from ready"
+            self.status == Status::Ready
+                || (self.status == Status::Preparing
+                    && self.action_id.as_deref() == Some(action_id.as_str())),
+            "action can only start from ready or matching preparation"
         );
         ensure!(!action_id.trim().is_empty(), "empty action identity");
         self.action_id = Some(action_id);

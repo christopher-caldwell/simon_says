@@ -11,6 +11,7 @@ fn role(kind: &str, adapter: Option<&str>) -> Role {
         model: None,
         effort: None,
         profile: None,
+        timeout_seconds: None,
         args: vec![],
     }
 }
@@ -136,4 +137,17 @@ fn surviving_action_process_group_is_uncertain() {
     fs::create_dir(&actions).unwrap();
     let error = invoke(&plan, &actions).unwrap_err();
     assert!(error.to_string().contains("processes running"));
+}
+#[test]
+fn timeout_stops_action_without_claiming_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = role("command", None);
+    r.argv = vec!["sh".into(), "-c".into(), "sleep 30".into()];
+    r.timeout_seconds = Some(1);
+    let plan = prepare(&r, Gate::Worker, "", dir.path(), &dir.path().join("packet")).unwrap();
+    let started = std::time::Instant::now();
+    let error = invoke(&plan, dir.path()).unwrap_err();
+    assert!(error.to_string().contains("timed out"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(8));
+    assert!(dir.path().join("process.json").exists());
 }

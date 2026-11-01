@@ -37,6 +37,9 @@ impl RunStore {
         );
         fs::create_dir(root).context("create run directory")?;
         let root = root.canonicalize()?;
+        if let Some(parent) = root.parent() {
+            File::open(parent)?.sync_all()?;
+        }
         fs::create_dir(root.join("actions"))?;
         let store = Self::lock(&root)?;
         ensure!(
@@ -131,6 +134,36 @@ impl RunStore {
         sync_dir(&self.root)?;
         Ok(())
     }
+    /// Persist action identity before Git checkout, filters or other preparation.
+    pub fn prepare_action(&self, record: &mut RunRecord, id: &str) -> Result<()> {
+        ensure!(record.state.status == Status::Ready, "run is not ready");
+        ensure!(
+            !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+            "invalid action id"
+        );
+        let next_action = record
+            .next_action
+            .checked_add(1)
+            .context("action counter exhausted")?;
+        record.state.status = Status::Preparing;
+        record.state.action_id = Some(id.to_owned());
+        record.next_action = next_action;
+        self.save(record)
+    }
+    /// Reserve an action directory and a writable scratch area before preparing its sandbox.
+    pub fn reserve(&self, id: &str) -> Result<PathBuf> {
+        ensure!(
+            !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+            "invalid action id"
+        );
+        let dir = self.root.join("actions").join(id);
+        fs::create_dir(&dir).context("reserve action directory")?;
+        let scratch = dir.join("scratch");
+        fs::create_dir(&scratch)?;
+        sync_dir(&dir)?;
+        sync_dir(&self.root.join("actions"))?;
+        Ok(scratch)
+    }
     /// Records packet and invocation plan before atomically setting Running. No subprocess has been invoked.
     pub fn begin(
         &self,
@@ -138,7 +171,10 @@ impl RunStore {
         packet: &serde_json::Value,
         plan: &impl Serialize,
     ) -> Result<PathBuf> {
-        ensure!(record.state.status == Status::Ready, "run is not ready");
+        ensure!(
+            record.state.status == Status::Preparing,
+            "run has not prepared an action"
+        );
         let id = packet
             .get("action_id")
             .and_then(|v| v.as_str())
@@ -147,23 +183,39 @@ impl RunStore {
             !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
             "invalid action id"
         );
+        ensure!(
+            record.state.action_id.as_deref() == Some(id),
+            "packet identity does not match prepared action"
+        );
         let dir = self.root.join("actions").join(id);
-        fs::create_dir(&dir).context("create action directory")?;
+        if dir.exists() {
+            let metadata = fs::symlink_metadata(&dir)?;
+            ensure!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "unsafe action directory"
+            );
+            let entries = fs::read_dir(&dir)?.collect::<std::result::Result<Vec<_>, _>>()?;
+            ensure!(
+                entries.len() == 1
+                    && entries[0].file_name() == "scratch"
+                    && entries[0].file_type()?.is_dir(),
+                "reserved action directory is not empty"
+            );
+        } else {
+            fs::create_dir(&dir).context("create action directory")?;
+        }
         write_new(&dir.join("packet.json"), packet)?;
         write_new(&dir.join("invocation.json"), plan)?;
         sync_dir(&dir)?;
         sync_dir(&self.root.join("actions"))?;
         record.state.start(id.to_owned())?;
-        record.next_action = record
-            .next_action
-            .checked_add(1)
-            .context("action counter exhausted")?;
         self.save(record)?;
         Ok(dir)
     }
     pub fn check_resumable(record: &RunRecord) -> Result<()> {
         match record.state.status {
             Status::Initializing => bail!("run initialization was interrupted; it cannot be resumed"),
+            Status::Preparing => bail!("action {:?} preparation is uncertain after interruption or failure; explicit reset is required; external side effects are not undone", record.state.action_id),
             Status::Running => bail!("action {:?} is uncertain after interruption or failure; explicit reset is required; external side effects are not undone", record.state.action_id),
             Status::Stopped => bail!("run stopped: {}; explicit recovery is required", record.state.stop_reason.as_deref().unwrap_or("unspecified")),
             Status::Complete => bail!("run is already complete"),

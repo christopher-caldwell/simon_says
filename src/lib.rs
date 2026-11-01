@@ -26,6 +26,8 @@ pub struct Role {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub profile: Option<String>,
+    /// Per-action wall-clock limit; defaults to 1800 seconds.
+    pub timeout_seconds: Option<u64>,
     #[serde(default)]
     pub args: Vec<String>,
 }
@@ -107,6 +109,12 @@ impl Workflow {
         let mut refs = BTreeSet::new();
         for (name, role) in &w.roles {
             ensure!(identifier(name), "invalid role name {name:?}");
+            if let Some(seconds) = role.timeout_seconds {
+                ensure!(
+                    (1..=86400).contains(&seconds),
+                    "role {name}: timeout_seconds must be 1..=86400"
+                );
+            }
             match role.kind.as_str() {
                 "command" => ensure!(
                     !role.argv.is_empty()
@@ -363,3 +371,6 @@ pub mod provider;
 pub mod git;
 
 pub mod controller;
+
+pub mod cleanup;
+pub mod sandbox;

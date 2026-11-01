@@ -24,6 +24,14 @@ pub struct InvocationPlan {
     pub adapter: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    #[serde(default = "default_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default)]
+    pub scratch: Option<PathBuf>,
+}
+
+fn default_timeout() -> u64 {
+    1800
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,6 +87,10 @@ pub fn prepare(
     cwd: &Path,
     packet_path: &Path,
 ) -> Result<InvocationPlan> {
+    ensure!(
+        (1..=86400).contains(&role.timeout_seconds.unwrap_or_else(default_timeout)),
+        "timeout_seconds must be 1..=86400"
+    );
     let cwd = cwd
         .canonicalize()
         .with_context(|| format!("canonicalize invocation cwd {}", cwd.display()))?;
@@ -182,6 +194,8 @@ pub fn prepare(
         adapter,
         model: role.model.clone(),
         effort: role.effort.clone(),
+        timeout_seconds: role.timeout_seconds.unwrap_or_else(default_timeout),
+        scratch: None,
     })
 }
 
@@ -226,6 +240,9 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    if let Some(scratch) = &plan.scratch {
+        command.env("SIMON_SCRATCH", scratch);
+    }
     // Prevent inherited Git redirection from moving an action outside its checkout.
     for key in [
         "GIT_DIR",
@@ -269,9 +286,33 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
     }
     #[cfg(unix)]
     let group = child.id() as libc::pid_t;
-    let status = child
-        .wait()
-        .with_context(|| format!("wait for {}", plan.program))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(plan.timeout_seconds);
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("wait for {}", plan.program))?
+        {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            // The direct child is still alive and unreaped, so its PID cannot be reused.
+            // Stop the action's own process group, then retain Running/uncertain state.
+            #[cfg(unix)]
+            {
+                // If group signalling fails, still stop the direct owned child.
+                if unsafe { libc::kill(-group, libc::SIGKILL) } != 0 {
+                    let _ = child.kill();
+                }
+            }
+            #[cfg(not(unix))]
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::File::open(&stdout_path).and_then(|f| f.sync_all());
+            let _ = fs::File::open(&stderr_path).and_then(|f| f.sync_all());
+            bail!("action timed out after {} seconds; process group was terminated, but external effects and escaped descendants remain uncertain", plan.timeout_seconds);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
     #[cfg(unix)]
     {
         // A surviving same-group descendant may still mutate work after the parent exits.
