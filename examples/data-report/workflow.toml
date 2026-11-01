@@ -1,0 +1,37 @@
+schema_version = 1
+name = "data-report-example"
+start = "validate"
+
+[roles.worker]
+kind = "command"
+argv = ["python3", "workflow_action.py"]
+
+[roles.reviewer]
+kind = "command"
+argv = ["python3", "workflow_action.py"]
+
+[roles.unblocker]
+kind = "command"
+argv = ["python3", "workflow_action.py"]
+
+[stages.validate]
+worker = "worker"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "validate.md"
+inputs = ["input.json"]
+outputs = ["validation.json"]
+output_schema = "validation.schema.json"
+on_pass = "report"
+max_review_cycles = 3
+
+[stages.report]
+worker = "worker"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "report.md"
+inputs = ["validation.json"]
+outputs = ["summary.json"]
+output_schema = "summary.schema.json"
+on_pass = "complete"
+max_review_cycles = 3
