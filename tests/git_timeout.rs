@@ -57,6 +57,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
         ],
     );
     git(&repo, &["config", "filter.slow.required", "true"]);
+    git(&repo, &["config", "filter.slow.smudge", "cat"]);
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-qm", "baseline"]);
     (temp, repo, run, trigger, effect)
