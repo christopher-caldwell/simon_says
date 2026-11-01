@@ -100,3 +100,45 @@ fn dangling_lock_symlink_never_creates_external_target() {
     assert!(RunStore::open(&root).is_err());
     assert!(!target.exists());
 }
+#[test]
+fn read_only_status_works_with_exclusive_lock_and_does_not_create_one() {
+    let (_tmp, record, store) = init();
+    let root = store.root().to_owned();
+    let before = fs::metadata(root.join("lock")).unwrap().modified().unwrap();
+    let loaded = RunStore::read_status(&root).unwrap();
+    assert_eq!(loaded.run_id, record.run_id);
+    assert!(RunStore::open(&root).is_err());
+    assert_eq!(
+        fs::metadata(root.join("lock")).unwrap().modified().unwrap(),
+        before
+    );
+    drop(store);
+    fs::remove_file(root.join("lock")).unwrap();
+    assert!(RunStore::read_status(&root).is_ok());
+    assert!(!root.join("lock").exists());
+}
+#[test]
+fn read_only_status_rejects_tampering_without_writing() {
+    let (_tmp, _, store) = init();
+    let root = store.root().to_owned();
+    let path = root.join("snapshot.json");
+    let original = fs::read(&path).unwrap();
+    let mut snapshot: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    snapshot["template"] = "tampered".into();
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+    let tampered = fs::read(&path).unwrap();
+    assert!(RunStore::read_status(&root).is_err());
+    assert_eq!(fs::read(&path).unwrap(), tampered);
+}
+#[cfg(unix)]
+#[test]
+fn read_only_status_rejects_record_symlinks_without_following_them() {
+    let (tmp, _, store) = init();
+    let root = store.root().to_owned();
+    let outside = tmp.path().join("outside");
+    fs::write(&outside, "keep").unwrap();
+    fs::remove_file(root.join("state.json")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("state.json")).unwrap();
+    assert!(RunStore::read_status(&root).is_err());
+    assert_eq!(fs::read_to_string(outside).unwrap(), "keep");
+}

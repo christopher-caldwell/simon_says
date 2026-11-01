@@ -62,7 +62,8 @@ fn codex_and_claude_plans_include_exact_model_and_effort() {
     assert!(p
         .argv
         .contains(&"model_reasoning_effort=\"high\"".to_string()));
-    assert_eq!(p.argv.last().unwrap(), "hello");
+    assert_eq!(p.argv.last().unwrap(), "-");
+    assert_eq!(p.stdin_prompt.as_deref(), Some("hello"));
     r.adapter = Some("claude".into());
     let p = prepare(&r, Gate::Worker, "hello", dir.path(), &packet).unwrap();
     assert_eq!(p.program, "claude");
@@ -71,7 +72,8 @@ fn codex_and_claude_plans_include_exact_model_and_effort() {
         .argv
         .windows(2)
         .any(|v| v == ["--permission-mode", "acceptEdits"]));
-    assert_eq!(p.argv[p.argv.len() - 2], "--");
+    assert_eq!(p.argv.last().unwrap(), "--");
+    assert_eq!(p.stdin_prompt.as_deref(), Some("hello"));
     let review = prepare(&r, Gate::Reviewer, "hello", dir.path(), &packet).unwrap();
     assert!(!review.argv.iter().any(|a| a == "--permission-mode"));
 }
@@ -152,19 +154,65 @@ fn timeout_stops_action_without_claiming_success() {
     assert!(dir.path().join("process.json").exists());
 }
 #[test]
-fn native_provider_rejects_oversized_argv_prompt_before_invocation() {
+fn native_provider_uses_stdin_for_large_prompt_and_bounds_input() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = role("agent", Some("codex"));
     r.profile = Some("profile.md".into());
+    let prompt = "x".repeat(256 * 1024);
+    let plan = prepare(
+        &r,
+        Gate::Reviewer,
+        &prompt,
+        dir.path(),
+        &dir.path().join("packet"),
+    )
+    .unwrap();
+    assert_eq!(plan.argv.last().unwrap(), "-");
+    assert_eq!(plan.stdin_prompt.as_deref(), Some(prompt.as_str()));
+    let serialized = serde_json::to_value(&plan).unwrap();
+    assert_eq!(serialized["stdin_prompt"], prompt);
     let error = prepare(
         &r,
         Gate::Reviewer,
-        &"x".repeat(65537),
+        &"x".repeat(4 * 1024 * 1024 + 1),
         dir.path(),
         &dir.path().join("packet"),
     )
     .unwrap_err();
-    assert!(error.to_string().contains("64 KiB"));
+    assert!(error.to_string().contains("4 MiB"));
+}
+#[test]
+fn file_backed_stdin_delivers_exact_prompt_without_pipe_deadlock() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = role("command", None);
+    r.argv = vec!["sh".into(), "-c".into(), "cat".into()];
+    let mut plan = prepare(&r, Gate::Worker, "", dir.path(), &dir.path().join("packet")).unwrap();
+    let prompt = "x".repeat(256 * 1024);
+    plan.stdin_prompt = Some(prompt.clone());
+    let out = invoke(&plan, dir.path()).unwrap();
+    assert!(out.success);
+    assert_eq!(out.response.as_deref(), Some(prompt.as_str()));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("prompt.txt")).unwrap(),
+        prompt
+    );
+}
+#[test]
+fn file_backed_prompt_still_obeys_timeout_if_child_never_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = role("command", None);
+    r.argv = vec!["sh".into(), "-c".into(), "sleep 30".into()];
+    r.timeout_seconds = Some(1);
+    let mut plan = prepare(&r, Gate::Worker, "", dir.path(), &dir.path().join("packet")).unwrap();
+    plan.stdin_prompt = Some("x".repeat(1024 * 1024));
+    let start = std::time::Instant::now();
+    let err = invoke(&plan, dir.path()).unwrap_err();
+    assert!(err.to_string().contains("timed out"));
+    assert!(start.elapsed() < std::time::Duration::from_secs(8));
+    assert_eq!(
+        fs::metadata(dir.path().join("prompt.txt")).unwrap().len(),
+        1024 * 1024
+    );
 }
 #[test]
 fn claude_workers_require_nested_sandbox_probe_without_guessing_policy() {

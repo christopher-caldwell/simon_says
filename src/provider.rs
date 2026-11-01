@@ -19,6 +19,10 @@ pub struct InvocationPlan {
     pub program: String,
     /// Does not include `program`; arguments are passed directly, never through a shell.
     pub argv: Vec<String>,
+    /// The exact provider prompt, durably recorded in the invocation before launch.
+    /// Native adapters receive it via a regular file on stdin, avoiding argv limits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdin_prompt: Option<String>,
     pub cwd: PathBuf,
     pub packet_path: PathBuf,
     pub adapter: String,
@@ -92,7 +96,10 @@ pub fn prepare(
         "timeout_seconds must be 1..=86400"
     );
     if role.kind == "agent" {
-        ensure!(prompt.len() <= 64 * 1024, "action packet exceeds the 64 KiB native-provider prompt limit; shorten task context, instructions, schema or feedback");
+        ensure!(
+            prompt.len() <= 4 * 1024 * 1024,
+            "native-provider prompt exceeds the 4 MiB limit"
+        );
     }
     let cwd = cwd
         .canonicalize()
@@ -144,7 +151,8 @@ pub fn prepare(
                         argv.extend(["-c".into(), format!("model_reasoning_effort=\"{effort}\"")]);
                     }
                     argv.extend(role.args.iter().cloned());
-                    argv.push(prompt.into());
+                    // Native Codex `exec -` reads the authoritative prompt from stdin.
+                    argv.push("-".into());
                     "codex"
                 }
                 "claude" => {
@@ -179,8 +187,9 @@ pub fn prepare(
                         ]);
                     }
                     argv.extend(role.args.iter().cloned());
+                    // As in Orchestrate, retain `--` so variadic native args cannot
+                    // consume a positional prompt; Claude reads stdin when omitted.
                     argv.push("--".into());
-                    argv.push(prompt.into());
                     "claude"
                 }
                 _ => bail!("unsupported provider adapter {adapter:?}"),
@@ -192,6 +201,7 @@ pub fn prepare(
     Ok(InvocationPlan {
         program,
         argv,
+        stdin_prompt: (role.kind == "agent").then(|| prompt.to_owned()),
         cwd,
         packet_path: packet_path.to_owned(),
         adapter,
@@ -235,12 +245,39 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
     };
     let stdout = open(&stdout_path)?;
     let stderr = open(&stderr_path)?;
+    // A seekable file avoids a blocking pipe writer and gives the provider a
+    // durable, inspectable copy of the exact prompt. The serialized plan was
+    // persisted before Running; a crash at any point is still uncertain.
+    let stdin = if let Some(prompt) = &plan.stdin_prompt {
+        use std::io::{Seek, Write};
+        ensure!(
+            prompt.len() <= 4 * 1024 * 1024,
+            "native-provider prompt exceeds the 4 MiB limit"
+        );
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let path = action_dir.join("prompt.txt");
+        let mut file = opts
+            .open(&path)
+            .with_context(|| format!("create {}", path.display()))?;
+        file.write_all(prompt.as_bytes())?;
+        file.sync_all()?;
+        file.rewind()?;
+        Stdio::from(file)
+    } else {
+        Stdio::null()
+    };
     let mut command = Command::new(&plan.program);
     command
         .args(&plan.argv)
         .current_dir(&plan.cwd)
         .env("SIMON_PACKET", &plan.packet_path)
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     if let Some(scratch) = &plan.scratch {
@@ -333,6 +370,34 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
             );
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+    if let Some(prompt) = &plan.stdin_prompt {
+        let path = action_dir.join("prompt.txt");
+        let meta = fs::symlink_metadata(&path)?;
+        ensure!(
+            meta.is_file() && !meta.file_type().is_symlink(),
+            "provider prompt record changed type"
+        );
+        ensure!(
+            meta.len() == prompt.len() as u64,
+            "provider prompt record changed size"
+        );
+        use std::io::Read;
+        let mut opts = OpenOptions::new();
+        opts.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut bytes = Vec::with_capacity(prompt.len());
+        opts.open(&path)?
+            .take(prompt.len() as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        ensure!(
+            bytes == prompt.as_bytes(),
+            "provider prompt record changed during execution"
+        );
     }
     fs::File::open(&stdout_path)?.sync_all()?;
     fs::File::open(&stderr_path)?.sync_all()?;

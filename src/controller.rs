@@ -162,9 +162,7 @@ fn write_result(path: &Path, data: &impl serde::Serialize) -> Result<()> {
     Ok(())
 }
 pub fn status(run_dir: &Path) -> Result<RunRecord> {
-    let store = RunStore::open(run_dir)?;
-    let (record, _) = store.load()?;
-    Ok(record)
+    RunStore::read_status(run_dir)
 }
 pub fn execute(run_dir: &Path) -> Result<RunRecord> {
     let store = RunStore::open(run_dir)?;

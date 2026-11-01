@@ -8,7 +8,7 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -98,25 +98,28 @@ impl RunStore {
     pub fn root(&self) -> &Path {
         &self.root
     }
+    /// Read a coherent status without creating or acquiring the run lock.
+    /// State is atomically replaced by the writer; each returned record is
+    /// checked against a complete, digest-verified snapshot. This observes a
+    /// point in time and confers no authority to mutate the run.
+    pub fn read_status(root: &Path) -> Result<RunRecord> {
+        let root = root.canonicalize().context("run directory not found")?;
+        let mut last_error = None;
+        for attempt in 0..4 {
+            match read_records(&root) {
+                Ok((record, _)) => return Ok(record),
+                Err(error) => last_error = Some(error),
+            }
+            if attempt < 3 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        Err(last_error.expect("at least one status read"))
+            .context("could not read a coherent, verified run status")
+    }
     pub fn load(&self) -> Result<(RunRecord, Snapshot)> {
         self.verify_lock()?;
-        for name in ["state.json", "snapshot.json"] {
-            let meta = fs::symlink_metadata(self.root.join(name))?;
-            ensure!(
-                meta.is_file() && !meta.file_type().is_symlink(),
-                "unsafe run record {name}"
-            );
-        }
-        let record: RunRecord = serde_json::from_slice(&fs::read(self.root.join("state.json"))?)?;
-        ensure!(record.version == 1, "unsupported run state version");
-        let snapshot: Snapshot =
-            serde_json::from_slice(&fs::read(self.root.join("snapshot.json"))?)?;
-        snapshot.verify()?;
-        ensure!(
-            snapshot.sha256 == record.snapshot_digest,
-            "run authority digest mismatch"
-        );
-        Ok((record, snapshot))
+        read_records(&self.root)
     }
     /// Restore the in-memory authority and running state after detecting tampering.
     /// This is accidental-tamper detection, not a same-user security boundary.
@@ -235,6 +238,50 @@ impl RunStore {
             Status::Ready => Ok(()),
         }
     }
+}
+fn read_regular(path: &Path) -> Result<Vec<u8>> {
+    let before =
+        fs::symlink_metadata(path).with_context(|| format!("inspect {}", path.display()))?;
+    ensure!(
+        before.is_file() && !before.file_type().is_symlink(),
+        "unsafe run record {}",
+        path.display()
+    );
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("open {}", path.display()))?;
+    let opened = file.metadata()?;
+    ensure!(opened.is_file(), "unsafe run record {}", path.display());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        ensure!(
+            before.dev() == opened.dev() && before.ino() == opened.ino() && opened.nlink() == 1,
+            "run record changed during read: {}",
+            path.display()
+        );
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+fn read_records(root: &Path) -> Result<(RunRecord, Snapshot)> {
+    let record: RunRecord = serde_json::from_slice(&read_regular(&root.join("state.json"))?)?;
+    ensure!(record.version == 1, "unsupported run state version");
+    let snapshot: Snapshot = serde_json::from_slice(&read_regular(&root.join("snapshot.json"))?)?;
+    snapshot.verify()?;
+    ensure!(
+        snapshot.sha256 == record.snapshot_digest,
+        "run authority digest mismatch"
+    );
+    Ok((record, snapshot))
 }
 fn write_new(path: &Path, value: &impl Serialize) -> Result<()> {
     let mut f = OpenOptions::new().write(true).create_new(true).open(path)?;
