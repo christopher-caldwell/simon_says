@@ -28,6 +28,35 @@ fn valid_two_stage_template() {
     assert_eq!(refs.len(), 5);
 }
 #[test]
+fn validates_bounded_named_routes_and_rejects_invalid_graphs() {
+    let (d, t) = setup();
+    let routed = t
+        .replace(
+            "start = \"validate\"",
+            "start = \"validate\"\nmax_stage_transitions = 4",
+        )
+        .replace(
+            "on_pass = \"report\"",
+            "on_pass = \"report\"\nroutes = { issues = \"report\", clean = \"complete\" }",
+        )
+        .replace("on_pass = \"complete\"", "on_pass = \"validate\"");
+    Workflow::parse_and_validate(&routed, d.path()).unwrap();
+    for bad in [
+        routed.replace("max_stage_transitions = 4\n", ""),
+        routed.replace("max_stage_transitions = 4", "max_stage_transitions = 0"),
+        routed.replace("max_stage_transitions = 4", "max_stage_transitions = 1001"),
+        routed.replace("issues = \"report\"", "issues = \"missing\""),
+        routed.replace("issues = \"report\"", "\"bad label\" = \"report\""),
+        routed.replace("on_pass = \"report\"", "on_pass = \"validate\""),
+        routed.replace("clean = \"complete\"", "clean = \"validate\""),
+    ] {
+        assert!(
+            Workflow::parse_and_validate(&bad, d.path()).is_err(),
+            "accepted {bad}"
+        );
+    }
+}
+#[test]
 fn rejects_unknown_fields_roles_and_routes() {
     let (d, t) = setup();
     for bad in [

@@ -30,6 +30,9 @@ pub struct Response {
     pub report: String,
     pub candidate_commit: Option<String>,
     pub inspected_commit: Option<String>,
+    /// A declared route label, selected only by a passing Reviewer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +52,17 @@ pub struct PendingApproval {
     pub stage: String,
     pub review_action: String,
     pub commit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Transition {
+    pub from_stage: String,
+    pub to_stage: String,
+    pub reviewed_commit: String,
+    pub review_action: String,
+    pub selected_route: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
@@ -67,6 +81,11 @@ pub struct State {
     pub approvals: Vec<Approval>,
     #[serde(default)]
     pub pending_approval: Option<PendingApproval>,
+    /// Cumulative accepted transitions; never reset during correction or reset.
+    #[serde(default)]
+    pub stage_transitions: u32,
+    #[serde(default)]
+    pub last_transition: Option<Transition>,
 }
 impl State {
     pub fn new(workflow: &Workflow, baseline: String) -> Self {
@@ -84,6 +103,8 @@ impl State {
             stop_reason: None,
             approvals: Vec::new(),
             pending_approval: None,
+            stage_transitions: 0,
+            last_transition: None,
         }
     }
     pub fn start(&mut self, action_id: String) -> Result<()> {
@@ -114,6 +135,33 @@ impl State {
             .stages
             .get(&self.stage)
             .ok_or_else(|| anyhow::anyhow!("unknown current stage"))?;
+        let destination = if self.gate == Gate::Reviewer && response.outcome == "pass" {
+            if stage.routes.is_empty() {
+                ensure!(
+                    response.route.is_none(),
+                    "route is not declared for this stage"
+                );
+                Some(stage.on_pass.clone())
+            } else {
+                let route = response
+                    .route
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("reviewer pass requires a declared route"))?;
+                Some(
+                    stage
+                        .routes
+                        .get(route)
+                        .ok_or_else(|| anyhow::anyhow!("unknown reviewer route {route:?}"))?
+                        .clone(),
+                )
+            }
+        } else {
+            ensure!(
+                response.route.is_none(),
+                "only a passing reviewer may select a route"
+            );
+            None
+        };
         match (self.gate, response.outcome.as_str()) {
             (Gate::Worker, "complete") => {
                 let commit = response
@@ -150,10 +198,16 @@ impl State {
                                 stage: self.stage.clone(),
                                 review_action: response.action_id.clone(),
                                 commit: self.accepted_commit.clone(),
+                                route: response.route.clone(),
                             });
                             self.status = Status::AwaitingApproval;
                         } else {
-                            self.advance(&stage.on_pass);
+                            self.advance(
+                                workflow,
+                                destination.as_deref().unwrap(),
+                                &response.action_id,
+                                response.route.as_deref(),
+                            );
                         }
                     }
                     "changes_required" => {
@@ -239,7 +293,22 @@ impl State {
             stage.approval_required,
             "current stage does not require approval"
         );
-        let next = stage.on_pass.clone();
+        let next = if stage.routes.is_empty() {
+            ensure!(pending.route.is_none(), "unexpected pending route");
+            stage.on_pass.clone()
+        } else {
+            let route = pending
+                .route
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("pending route missing"))?;
+            stage
+                .routes
+                .get(route)
+                .ok_or_else(|| anyhow::anyhow!("pending route is not declared"))?
+                .clone()
+        };
+        let review_action = pending.review_action.clone();
+        let route = pending.route.clone();
         self.approvals.push(Approval {
             approval_id: pending.approval_id.clone(),
             review_action: pending.review_action.clone(),
@@ -250,10 +319,49 @@ impl State {
             note,
         });
         self.pending_approval = None;
-        self.advance(&next);
+        self.advance(workflow, &next, &review_action, route.as_deref());
         Ok(())
     }
-    fn advance(&mut self, next: &str) {
+    fn advance(
+        &mut self,
+        workflow: &Workflow,
+        next: &str,
+        review_action: &str,
+        route: Option<&str>,
+    ) {
+        if workflow
+            .max_stage_transitions
+            .is_some_and(|max| self.stage_transitions >= max)
+        {
+            self.status = Status::Stopped;
+            self.stop_reason = Some("workflow stage transition limit reached".into());
+            return;
+        }
+        let Some(count) = self.stage_transitions.checked_add(1) else {
+            self.status = Status::Stopped;
+            self.stop_reason = Some("workflow stage transition counter overflow".into());
+            return;
+        };
+        // A nonterminal stage cannot ever finish if entering it uses the last
+        // available transition. Stop at its predecessor before dispatching any
+        // more work or external side effects. Completion may use the last one.
+        if next != "complete"
+            && workflow
+                .max_stage_transitions
+                .is_some_and(|max| count >= max)
+        {
+            self.status = Status::Stopped;
+            self.stop_reason = Some("workflow stage transition limit reached".into());
+            return;
+        }
+        self.stage_transitions = count;
+        self.last_transition = Some(Transition {
+            from_stage: self.stage.clone(),
+            to_stage: next.to_owned(),
+            reviewed_commit: self.accepted_commit.clone(),
+            review_action: review_action.to_owned(),
+            selected_route: route.map(str::to_owned),
+        });
         if next == "complete" {
             self.status = Status::Complete;
         } else {

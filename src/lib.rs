@@ -15,6 +15,10 @@ pub struct Workflow {
     /// Reusable workflow purpose, included in every action packet.
     pub purpose: Option<String>,
     pub start: String,
+    /// Maximum number of accepted stage transitions, including completion.
+    /// Required for conditional routes and for workflows containing cycles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_stage_transitions: Option<u32>,
     /// Tracked project files whose baseline bytes and modes cannot change during a run.
     #[serde(default)]
     pub frozen_project_files: Vec<String>,
@@ -48,6 +52,9 @@ pub struct Stage {
     pub outputs: Vec<String>,
     pub output_schema: Option<String>,
     pub on_pass: String,
+    /// Reviewer-selected labels mapped to frozen, permitted destinations.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub routes: BTreeMap<String, String>,
     /// Stop after review until the accepted checkpoint is explicitly approved.
     #[serde(default)]
     pub approval_required: bool,
@@ -122,6 +129,12 @@ impl Workflow {
             !w.stages.is_empty() && w.stages.contains_key(&w.start),
             "start stage does not exist"
         );
+        if let Some(max) = w.max_stage_transitions {
+            ensure!(
+                (1..=1000).contains(&max),
+                "max_stage_transitions must be 1..=1000"
+            );
+        }
         let mut frozen_paths = BTreeSet::new();
         for path in &w.frozen_project_files {
             validate_relative_path(path).context("invalid frozen project path")?;
@@ -212,6 +225,26 @@ impl Workflow {
                 "stage {name}: unknown transition {}",
                 stage.on_pass
             );
+            if !stage.routes.is_empty() {
+                ensure!(
+                    w.max_stage_transitions.is_some(),
+                    "stage {name}: routes require max_stage_transitions"
+                );
+                ensure!(
+                    stage.routes.values().any(|v| v == &stage.on_pass),
+                    "stage {name}: on_pass must be one of the declared route destinations"
+                );
+                for (label, destination) in &stage.routes {
+                    ensure!(
+                        identifier(label),
+                        "stage {name}: invalid route label {label:?}"
+                    );
+                    ensure!(
+                        destination == "complete" || w.stages.contains_key(destination),
+                        "stage {name}: route {label} has unknown destination {destination}"
+                    );
+                }
+            }
             ensure!(
                 (1..=100).contains(&stage.max_review_cycles),
                 "stage {name}: max_review_cycles must be 1..=100"
@@ -239,13 +272,22 @@ impl Workflow {
             }
         }
         let mut seen = BTreeSet::new();
-        let mut next = w.start.as_str();
-        while next != "complete" {
-            ensure!(
-                seen.insert(next.to_string()),
-                "pass transition cycle at {next}"
-            );
-            next = &w.stages[next].on_pass;
+        let mut pending = vec![w.start.as_str()];
+        let mut reaches_complete = false;
+        while let Some(next) = pending.pop() {
+            if next == "complete" {
+                reaches_complete = true;
+                continue;
+            }
+            if !seen.insert(next.to_string()) {
+                continue;
+            }
+            let stage = &w.stages[next];
+            if stage.routes.is_empty() {
+                pending.push(&stage.on_pass);
+            } else {
+                pending.extend(stage.routes.values().map(String::as_str));
+            }
         }
         ensure!(
             seen.len() == w.stages.len(),
@@ -255,6 +297,17 @@ impl Workflow {
                 .filter(|s| !seen.contains(*s))
                 .collect::<Vec<_>>()
         );
+        ensure!(reaches_complete, "workflow has no route to complete");
+        // Legacy definitions have exactly one successor. Retain their acyclic
+        // validation unless the author explicitly supplies a durable bound.
+        if w.max_stage_transitions.is_none() {
+            let mut linear_seen = BTreeSet::new();
+            let mut next = w.start.as_str();
+            while next != "complete" {
+                ensure!(linear_seen.insert(next), "pass transition cycle at {next}");
+                next = &w.stages[next].on_pass;
+            }
+        }
         let mut files = BTreeMap::new();
         for name in refs {
             let content = read_confined(root, &name)?;
