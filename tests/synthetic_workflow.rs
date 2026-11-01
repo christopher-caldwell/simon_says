@@ -110,3 +110,18 @@ fn one_block_retries_but_repeated_block_stops() {
     assert_eq!(packet(&run, 2)["gate"], "worker");
     assert!(!run.join("actions/action-3").exists());
 }
+#[test]
+fn reviewer_block_retries_exact_candidate() {
+    let (_temp, repo, run) = setup("reviewer_block_once");
+    let result = assert_success(&invoke(&repo, &run));
+    assert_eq!(result["state"]["status"], "complete");
+    let before = packet(&run, 1);
+    let unblock = packet(&run, 2);
+    let retry = packet(&run, 3);
+    assert_eq!(before["gate"], "reviewer");
+    assert_eq!(unblock["gate"], "unblocker");
+    assert_eq!(unblock["unblock_origin"], "reviewer");
+    assert_eq!(retry["gate"], "reviewer");
+    assert_eq!(before["candidate_commit"], retry["candidate_commit"]);
+    assert!(retry["feedback"].to_string().contains("recoverable block"));
+}

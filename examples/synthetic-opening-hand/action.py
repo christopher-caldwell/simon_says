@@ -58,6 +58,9 @@ def main():
         result, filename = analysis(load("samples.json")), "analysis.json"
     elif gate == "reviewer":
         head = git("rev-parse", "HEAD")
+        if stage == "simulate" and exercise == "reviewer_block_once" and not any("permits one retry" in item for item in feedback):
+            reply(packet, "blocked", "Synthetic review requested a recoverable block.", inspected=head)
+            return
         if stage == "simulate":
             actual = load("samples.json")
             if actual != samples(config, actual["revision"]):
