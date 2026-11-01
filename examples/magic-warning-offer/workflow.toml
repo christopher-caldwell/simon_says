@@ -1,0 +1,30 @@
+schema_version = 1
+name = "magic-modal-offer-isolated-repair"
+purpose = "Repair a verified action-space warning in an isolated engine copy using a workflow-defined Fixer and frozen actual-archive controls."
+start = "repair"
+frozen_project_files = ["warning-workflow.toml", "simon-repair/profile.md", "simon-warning/issue.json", "simon-warning/fix.md", "simon-warning/schema.json", "simon-warning/review.py", "simon-warning/stop.py", "manabrew-rs/crates/manabrew-engine/src/game_loop.rs", "manabrew-rs/crates/manabrew-engine/src/game_loop/origin_offer_regression.rs"]
+[roles.fixer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-terra"
+effort = "high"
+profile = "simon-repair/profile.md"
+timeout_seconds = 1800
+[roles.reviewer]
+kind = "command"
+argv = ["python3", "-B", "simon-warning/review.py"]
+timeout_seconds = 1800
+[roles.stop]
+kind = "command"
+argv = ["python3", "-B", "simon-warning/stop.py"]
+timeout_seconds = 30
+[stages.repair]
+worker = "fixer"
+reviewer = "reviewer"
+unblocker = "stop"
+instructions = "simon-warning/fix.md"
+inputs = ["simon-warning/issue.json"]
+outputs = ["warning-repair.json"]
+output_schema = "simon-warning/schema.json"
+on_pass = "complete"
+max_review_cycles = 2

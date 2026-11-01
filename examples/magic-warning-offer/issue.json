@@ -1,0 +1,8 @@
+{
+  "issue_id": "MAGIC-MODAL-OFFER-NO-LEGAL-MODE",
+  "source": "Isolated retained native run magic-dynamic-game-run-v3, post-repair attempt 90042c23f1d24006acb51b46d787aad8, trace seq 829-831 and 1076-1093",
+  "observed": "At turn 9 the action space offered Origin of Metalbending with no artifact or enchantment battlefield targets, and the selected play failed without mode, target or payment prompts. At turn 13 the same card was offered and cast once valid artifact targets existed.",
+  "root_cause_hypothesis": "The cast path checks whether SP$ Charm has legal modes before payment, but action-space playability may omit that check. Verify actual code, do not assume the hypothesis.",
+  "controls": "The frozen archived-card action-space tests require: do not offer Origin with no legal mode; offer Origin with a legal artifact target; offer Boros Charm when a legal untargeted/player mode is available.",
+  "scope": "Fix only the discrepancy between pre-cast mode legality and action-space offering. Do not alter general player cancellation, unrelated fizzle handling, runtime install, evidence or decks."
+}
