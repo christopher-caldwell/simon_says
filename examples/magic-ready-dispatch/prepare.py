@@ -44,6 +44,29 @@ def add_protected_plan(text):
     return '\n'.join(lines) + '\n'
 
 
+def add_protected_evidence(text):
+    stages = {'triage', 'escalate', 'repair_origin', 'build_origin', 'simulate_origin', 'triage_final', 'escalate_final'}
+    lines = text.splitlines()
+    stage = None
+    inputs, protection = set(), set()
+    for index, line in enumerate(lines):
+        if line.startswith('['):
+            import re
+            match = re.fullmatch(r'\[stages\.([a-z_]+)\]', line)
+            stage = match.group(1) if match else None
+        if stage in stages and line.startswith(('inputs = ', 'protected_inputs = ')):
+            key, value = line.split(' = ', 1)
+            values = json.loads(value)
+            if 'origin-evidence.json' in values:
+                raise ValueError('duplicate origin evidence declaration')
+            values.append('origin-evidence.json')
+            lines[index] = key + ' = ' + json.dumps(values)
+            (inputs if key == 'inputs' else protection).add(stage)
+    if inputs != stages or protection != stages:
+        raise ValueError('missing downstream origin evidence input or protection')
+    return '\n'.join(lines) + '\n'
+
+
 def adapt_game(text):
     text = once(text, "packet['stage'] not in ('supervise', 'simulate', 'simulate_origin')",
                 "packet['stage'] not in ('collect', 'simulate', 'simulate_origin')", 'game stage')
@@ -85,6 +108,28 @@ def adapt_review(text):
     text = once(text, needle, branch + needle, 'collection plan review')
     return text
 
+
+def adapt_probe_review(text):
+    text = once(text, "'analyze': 'analysis.json', 'triage': 'triage.json',",
+                "'analyze': 'analysis.json', 'probe_origin': 'origin-evidence.json', 'triage': 'triage.json',", 'probe allowed files')
+    marker = "elif p['stage'] == 'triage':"
+    branch = """elif p['stage'] == 'probe_origin':
+    probe = subprocess.run(['python3', '-B', 'simon-four/origin_probe.py', 'inspect'], text=True, capture_output=True, timeout=1750)
+    if probe.returncode:
+        raise ValueError('independent Origin probe failed: ' + probe.stderr[-2000:])
+    if json.loads(Path('origin-evidence.json').read_text()) != json.loads(probe.stdout):
+        result.update(outcome='changes_required', report='The evidence must match the independent frozen probe.')
+    else:
+        result['report'] = 'Independently reran the frozen probe on the exact candidate; live causality remains unproven.'
+"""
+    text = once(text, marker, branch + marker, 'probe review branch')
+    old = """        probe = subprocess.run(['python3', '-B', 'simon-four/origin_probe.py', 'inspect'], text=True, capture_output=True, timeout=1750)
+        if probe.returncode:
+            raise ValueError('origin probe failed; no repair route: ' + probe.stderr[-2000:])
+        evidence = json.loads(probe.stdout)
+"""
+    return once(text, old, "        evidence = json.loads(Path('origin-evidence.json').read_text())\n", 'reviewed probe input')
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('prepared_game_project', type=Path)
@@ -99,7 +144,7 @@ def main():
         command += ['--seed', args.seed]
     subprocess.run(command, check=True)
     root = args.new_project.resolve(strict=True)
-    for name in ('supervise.md', 'plan.schema.json', 'collect.md'):
+    for name in ('supervise.md', 'plan.schema.json', 'collect.md', 'probe-stage.py', 'probe-stage.md'):
         shutil.copyfile(here / name, root / 'simon-four' / name)
 
     workflow = root / 'workflow.toml'
@@ -135,7 +180,36 @@ issues = \"analyze\"
 clean = \"analyze\"
 '''
     text = text[:start] + replacement + text[end:]
-    workflow.write_text(add_protected_plan(text))
+    text = add_protected_plan(text)
+    text = once(text, 'max_stage_transitions = 16', 'max_stage_transitions = 17', 'probe transition bound')
+    text = once(text, 'timeout_seconds = 1800\n[roles.verifier]',
+                'timeout_seconds = 1800\n[roles.fixer.scratch_env]\nCARGO_TARGET_DIR = "cargo-target"\n[roles.verifier]', 'Fixer action-owned Cargo scratch')
+    text = once(text, '"simon-four/collect.md",', '"simon-four/collect.md", "simon-four/probe-stage.py", "simon-four/probe-stage.md",', 'frozen probe files')
+    text = once(text, '[stages.investigate]', '[roles.origin_probe]\nkind = "command"\nargv = ["python3", "-B", "simon-four/probe-stage.py"]\ntimeout_seconds = 1800\n\n[stages.investigate]', 'probe role')
+    text = once(text, 'warnings = "triage"', 'warnings = "probe_origin"', 'probe route')
+    stage = '''[stages.probe_origin]
+worker = "origin_probe"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/probe-stage.md"
+inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json", "collection-plan.json"]
+protected_inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json", "collection-plan.json"]
+outputs = ["origin-evidence.json"]
+on_pass = "triage"
+max_review_cycles = 2
+
+'''
+    text = once(text, '[stages.triage]', stage + '[stages.triage]', 'probe stage')
+    workflow.write_text(add_protected_evidence(text))
+
+    triage = root / 'simon-four/triage.md'
+    text = triage.read_text()
+    text = once(text, 'then independently run `python3 -B simon-four/verify.py verify-post` once and `python3 -B simon-four/origin_probe.py inspect` once in action scratch.',
+                'and the independently reviewed origin-evidence.json, then independently run `python3 -B simon-four/verify.py verify-post` once in action scratch. Do not rerun the long Origin probe.', 'triage probe instruction')
+    triage.write_text(text)
+    for name in ('fix.md', 'fix-origin.md'):
+        instructions = root / 'simon-four' / name
+        instructions.write_text(instructions.read_text() + '\nThe controller sets CARGO_TARGET_DIR to this action’s scratch directory. Preserve it for all Cargo commands; do not create build outputs in the managed checkout.\n')
 
     profile = root / 'simon-four/profiles/supervisor.md'
     text = profile.read_text()
@@ -152,7 +226,7 @@ clean = \"analyze\"
                                   "if p['stage'] in ('collect', 'simulate', 'simulate_origin'):", 'game review stage'))
 
     review = root / 'simon-four/review.py'
-    review.write_text(adapt_review(review.read_text()))
+    review.write_text(adapt_probe_review(adapt_review(review.read_text())))
     git(root, 'add', '--', 'workflow.toml', 'simon-four', 'simon-game/game.py', 'simon-game/review.py')
     git(root, 'commit', '-m', 'Dispatch bounded collection directly after reviewed Supervisor handoff')
     print('Prepared directly supervised collection baseline ' + git(root, 'rev-parse', 'HEAD'))

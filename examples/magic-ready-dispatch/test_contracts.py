@@ -21,6 +21,42 @@ def git(root, *args):
 
 
 class DirectCollection(unittest.TestCase):
+    def test_all_downstream_stages_protect_reviewed_origin_evidence(self):
+        stages = ['triage', 'escalate', 'repair_origin', 'build_origin', 'simulate_origin', 'triage_final', 'escalate_final']
+        source = ''.join(f'[stages.{name}]\ninputs = ["x"]\nprotected_inputs = ["x"]\n' for name in stages)
+        output = prepare.add_protected_evidence(source)
+        self.assertEqual(output.count('"origin-evidence.json"'), 2 * len(stages))
+        for name in stages:
+            with self.subTest(stage=name), self.assertRaises(ValueError):
+                prepare.add_protected_evidence(source.replace(f'[stages.{name}]\n', '[stages.missing]\n'))
+
+    def test_probe_commits_and_reviewer_rejects_mismatched_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); (root / 'simon-four').mkdir()
+            git(root, 'init', '-q'); git(root, 'config', 'user.name', 'Test'); git(root, 'config', 'user.email', 'test@example.invalid')
+            git(root, 'commit', '--allow-empty', '-qm', 'baseline'); baseline = git(root, 'rev-parse', 'HEAD')
+            (root / 'simon-four/origin_probe.py').write_text('import json; print(json.dumps({"control":"reproduced","recommendation":"investigate"}))\n')
+            packet = root / 'packet.json'
+            packet.write_text(json.dumps({'stage':'probe_origin','gate':'worker','action_id':'a'}))
+            env = dict(os.environ, SIMON_PACKET=str(packet))
+            worker = subprocess.run(['python3','-B',str(HERE / 'probe-stage.py')], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(worker.returncode, 0, worker.stderr)
+            head = git(root, 'rev-parse', 'HEAD')
+            self.assertEqual(json.loads(worker.stdout)['candidate_commit'], head)
+            source = prepare.adapt_probe_review(prepare.adapt_review((HERE.parent / 'magic-ready-origin/review.py').read_text()))
+            (root / 'review.py').write_text(source)
+            packet.write_text(json.dumps({'stage':'probe_origin','gate':'reviewer','action_id':'b',
+                'candidate_commit':head,'baseline_commit':baseline}))
+            def review():
+                return subprocess.run(['python3','-B','review.py'], cwd=root, env=env, capture_output=True, text=True)
+            checked = review()
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertEqual(json.loads(checked.stdout)['outcome'], 'pass')
+            (root / 'simon-four/origin_probe.py').write_text('import json; print(json.dumps({"control":"passed","recommendation":"unresolved"}))\n')
+            checked = review()
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertEqual(json.loads(checked.stdout)['outcome'], 'changes_required')
+
     def test_all_downstream_stages_must_protect_the_reviewed_plan(self):
         stages = ['collect', 'analyze', 'repair', 'build', 'simulate', 'triage', 'escalate',
                   'repair_origin', 'build_origin', 'simulate_origin', 'triage_final', 'escalate_final']

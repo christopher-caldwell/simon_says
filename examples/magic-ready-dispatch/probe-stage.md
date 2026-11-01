@@ -1,0 +1,1 @@
+Run the frozen bounded Origin probe once and commit its structured evidence. The independent reviewer repeats the probe against the exact candidate before Analyzer receives it. Observed warning and independently reproduced defect do not prove the live warning's cause.
