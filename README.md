@@ -10,9 +10,9 @@ cargo run -- status /path/outside/project/new-run
 cargo run -- resume /path/outside/project/new-run
 ```
 
-`run` requires a new run directory whose parent exists and a clean Git project. It continues until completion, a bounded stop, or an error. The project checkout is left alone; a detached worktree is created under the run directory. Each action has a packet, invocation, stdout, stderr, and result or failure under `actions/`; detached review checkouts are retained under `reviews/`. `status` prints durable JSON including candidate and accepted commits. An interrupted or failed action stays `running` and `resume` refuses to replay it.
+`run` requires a new run directory whose parent exists and a clean Git project. It continues until completion, a bounded stop, or an error. The project checkout is left alone; a detached worktree is created under the run directory. Each action has a packet, invocation, process receipt, stdout, stderr, and result or failure under `actions/`; detached review checkouts are retained under `reviews/`. `status` prints durable JSON including candidate and accepted commits. An interrupted or failed action stays `running` and `resume` refuses to replay it.
 
-Recovery is explicit. First confirm the original action and its descendants have exited and reconcile any external effects. Then use:
+Recovery is explicit. First confirm the original action and its descendants have exited (the process receipt is diagnostic only: it may be absent after a crash and PIDs can be reused) and reconcile any external effects. Then use:
 
 ```sh
 cargo run -- reset /path/to/run --acknowledge-external-effects

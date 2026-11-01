@@ -28,6 +28,9 @@ fn command_receives_packet_and_output_is_logged() {
     let plan = prepare(&r, Gate::Worker, "unused", dir.path(), &packet).unwrap();
     let out = invoke(&plan, dir.path()).unwrap();
     assert!(out.success);
+    let process: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.path().join("process.json")).unwrap()).unwrap();
+    assert!(process["pid"].as_u64().unwrap() > 0);
     assert_eq!(out.response.as_deref(), Some("packet contents"));
     assert_eq!(
         fs::read_to_string(dir.path().join("stderr.txt")).unwrap(),

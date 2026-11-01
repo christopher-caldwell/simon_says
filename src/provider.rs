@@ -226,6 +226,20 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    // Prevent inherited Git redirection from moving an action outside its checkout.
+    for key in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(key);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -234,6 +248,25 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
     let mut child = command
         .spawn()
         .with_context(|| format!("invoke {}", plan.program))?;
+    // Receipt is diagnostic only: a crash can occur between spawn and this write,
+    // and PIDs can be reused. It never authorizes an automatic replay or reset.
+    {
+        use std::io::Write;
+        let mut receipt = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(action_dir.join("process.json"))?;
+        #[cfg(unix)]
+        let process_group = Some(child.id());
+        #[cfg(not(unix))]
+        let process_group: Option<u32> = None;
+        serde_json::to_writer_pretty(
+            &mut receipt,
+            &serde_json::json!({"pid": child.id(), "process_group": process_group}),
+        )?;
+        receipt.write_all(b"\n")?;
+        receipt.sync_all()?;
+    }
     #[cfg(unix)]
     let group = child.id() as libc::pid_t;
     let status = child
