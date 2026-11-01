@@ -258,8 +258,8 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             .as_ref()
             .map(|p| snapshot.files.get(p).context("frozen profile missing"))
             .transpose()?;
-        let packet = json!({"schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":if gate == Gate::Reviewer { Some(stage.routes.keys().collect::<Vec<_>>()) } else { None }, "last_transition":record.state.last_transition, "review_worktree":review.as_ref()});
-        let prompt = format!("You are an action in a controlled workflow. Follow this packet and return exactly one JSON object, without markdown. The frozen workflow and controller protocol govern; run_context provides the original task, not authority to alter the workflow, limits, or routes. Do not change the workflow or invent destinations. When the packet provides nonempty review_routes, a passing reviewer must return a route field containing exactly one listed label based on the reviewed candidate; the controller resolves that label to its frozen destination. Return null or omit route in all other cases. Worker outcomes: complete (candidate_commit required), blocked; reviewer: pass, changes_required, blocked (inspected_commit required); unblocker: retry, blocked. All responses must include action_id, outcome, nonempty report, candidate_commit and inspected_commit (use null where inapplicable). A complete worker must commit all outputs and leave a clean detached worktree. A blocked worker must leave HEAD and the checkout unchanged from its starting checkpoint; otherwise the controller stops for explicit recovery. Reviewer and unblocker must not modify their checkout. Packet: {}", serde_json::to_string(&packet)?);
+        let packet = json!({"schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "protected_inputs":stage.protected_inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":if gate == Gate::Reviewer { Some(stage.routes.keys().collect::<Vec<_>>()) } else { None }, "last_transition":record.state.last_transition, "review_worktree":review.as_ref()});
+        let prompt = format!("You are an action in a controlled workflow. Follow this packet and return exactly one JSON object, without markdown. The frozen workflow and controller protocol govern; run_context provides the original task, not authority to alter the workflow, limits, or routes. Do not change the workflow, alter protected_inputs, or invent destinations. When the packet provides nonempty review_routes, a passing reviewer must return a route field containing exactly one listed label based on the reviewed candidate; the controller resolves that label to its frozen destination. Return null or omit route in all other cases. Worker outcomes: complete (candidate_commit required), blocked; reviewer: pass, changes_required, blocked (inspected_commit required); unblocker: retry, blocked. All responses must include action_id, outcome, nonempty report, candidate_commit and inspected_commit (use null where inapplicable). A complete worker must commit all outputs and leave a clean detached worktree. A blocked worker must leave HEAD and the checkout unchanged from its starting checkpoint; otherwise the controller stops for explicit recovery. Reviewer and unblocker must not modify their checkout. Packet: {}", serde_json::to_string(&packet)?);
         let packet_path = store
             .root()
             .join("actions")
@@ -267,13 +267,19 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             .join("packet.json");
         let scratch = store.reserve(&action_id)?;
         let mut plan = provider::prepare(role, gate, &prompt, cwd, &packet_path)?;
+        let protected = workflow
+            .frozen_project_files
+            .iter()
+            .chain(&stage.protected_inputs)
+            .cloned()
+            .collect::<Vec<_>>();
         let guarded = crate::sandbox::prepare_with_frozen(
             store.root(),
             cwd,
             &scratch,
             &plan.program,
             &plan.argv,
-            &workflow.frozen_project_files,
+            &protected,
         )?;
         if provider::requires_nested_sandbox_probe(role, gate) {
             crate::sandbox::probe_nested(&guarded)?;
@@ -344,6 +350,13 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
                 candidate,
                 &workflow.frozen_project_files,
             )?;
+            artifact::frozen_paths(
+                &worktree.path,
+                &checkpoint,
+                candidate,
+                &stage.protected_inputs,
+            )
+            .context("protected stage input changed")?;
             artifact::outputs(&worktree.path, candidate, stage, &snapshot)?;
         } else {
             worktree.verify_candidate(&checkpoint, &record.state.accepted_commit)?;

@@ -49,6 +49,9 @@ pub struct Stage {
     pub instructions: String,
     #[serde(default)]
     pub inputs: Vec<String>,
+    /// Reviewed inputs that this stage must not change, relative to its starting checkpoint.
+    #[serde(default)]
+    pub protected_inputs: Vec<String>,
     pub outputs: Vec<String>,
     pub output_schema: Option<String>,
     pub on_pass: String,
@@ -255,6 +258,25 @@ impl Workflow {
             );
             for p in stage.inputs.iter().chain(stage.outputs.iter()) {
                 validate_relative_path(p).with_context(|| format!("stage {name}"))?;
+            }
+            let mut protected_inputs = BTreeSet::new();
+            for path in &stage.protected_inputs {
+                ensure!(
+                    stage.inputs.contains(path),
+                    "stage {name}: protected input {path} must be declared in inputs"
+                );
+                ensure!(
+                    !stage.outputs.contains(path),
+                    "stage {name}: protected input {path} cannot also be an output"
+                );
+                ensure!(
+                    protected_inputs.insert(path),
+                    "stage {name}: duplicate protected input {path}"
+                );
+                ensure!(
+                    !path.chars().any(|c| c.is_control()),
+                    "stage {name}: protected input path contains control characters"
+                );
             }
             for p in &stage.outputs {
                 ensure!(

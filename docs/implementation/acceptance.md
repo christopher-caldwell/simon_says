@@ -16,6 +16,7 @@
 | Approval required after review | Stop for explicit approval bound to a unique review ID, accepted commit and frozen digest; no later stage runs first |
 | Approval verification interrupted | Persist uncertain checking state; refuse replay until explicit recovery |
 | Declared JSON Schema violated | Mechanical gate fails; no Reviewer pass/next stage |
+| Protected prior-stage input altered | Deny direct action writes and reject changed blob or mode before review; ordinary inputs remain editable unless protected |
 
 ## Execution
 
