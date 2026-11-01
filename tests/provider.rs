@@ -87,6 +87,9 @@ fn native_owned_flags_and_bad_effort_are_rejected() {
         "-cmodel_reasoning_effort=low",
         "--json",
         "resume",
+        "--last",
+        "--all",
+        "--worktree",
     ] {
         assert!(
             validate_native_args("codex", &[arg.into()]).is_err(),

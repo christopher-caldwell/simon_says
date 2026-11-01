@@ -83,7 +83,20 @@ pub struct InvocationOutcome {
 pub fn validate_native_args(adapter: &str, args: &[String]) -> Result<()> {
     let owned: &[&str] = match adapter {
         "codex" => &[
-            "exec", "resume", "--json", "-C", "--cd", "--model", "-m", "-c", "--config", "--",
+            "exec",
+            "resume",
+            "--json",
+            "-C",
+            "--cd",
+            "--model",
+            "-m",
+            "-c",
+            "--config",
+            "--",
+            // Session selection and checkout identity are controller-owned.
+            "--last",
+            "--all",
+            "--worktree",
         ],
         "claude" => &[
             "--",
