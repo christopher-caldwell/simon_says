@@ -6,6 +6,8 @@ Each role may set `timeout_seconds` from 1 to 86400 (default 1800); on timeout t
 
 Native agent streams must be valid JSON events and include their successful terminal event (`turn.completed` after the last completed agent message for Codex; `result` with `subtype=success` and `is_error=false` for Claude). Malformed events, later work, an explicit failed turn or a missing terminal event leave the action uncertain even if the process exits zero. This fail-closed contract depends on the native CLI's event format; incompatible CLI versions require adapter verification.
 
+For Codex, started items must have distinct nonempty IDs of at most 512 bytes and must complete in the same turn. At most 4,096 items may be outstanding at once; an update must refer to an outstanding item. A stream that exceeds these bounds stops as uncertain.
+
 A reviewed stage can choose a workflow-defined route. For example, to dispatch a repair role only when an independently reviewed report finds an issue, and then rerun the original stage, use:
 
 ```toml
