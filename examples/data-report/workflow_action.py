@@ -60,7 +60,7 @@ def main():
     try:
         expected = expected_validation() if stage == "validate" else expected_summary()
     except (ValueError, OSError, json.JSONDecodeError, KeyError) as error:
-        output(packet, "blocked", str(error), inspected=packet.get("candidate_commit") if gate == "reviewer" else None)
+        output(packet, "blocked", str(error), inspected=git("rev-parse", "HEAD") if gate == "reviewer" else None)
         return
     if gate == "worker":
         Path(path).write_text(json.dumps(expected, indent=2) + "\n")
