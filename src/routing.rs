@@ -1,4 +1,4 @@
-//! Pure transition logic. The execution and checkpoint layers are not implemented.
+//! Pure transition logic; execution and checkpoint checks are in the controller.
 use crate::Workflow;
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};

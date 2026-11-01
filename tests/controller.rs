@@ -308,6 +308,27 @@ fn action_timeout_is_durable_and_does_not_replay() {
     assert!(!cli(&["resume", r.to_str().unwrap()]).status.success());
 }
 #[test]
+fn oversized_log_leaves_uncertain_action_and_never_replays() {
+    let (_tmp, p, r) = setup();
+    fs::write(
+        p.join("workflow_action.py"),
+        "import os,time\nos.ftruncate(1, 64*1024*1024+1)\ntime.sleep(30)\n",
+    )
+    .unwrap();
+    git(&p, &["add", "workflow_action.py"]);
+    git(&p, &["commit", "-qm", "oversized log fixture"]);
+    assert!(!run_cli(&p, &r).status.success());
+    let s = state(&r);
+    assert_eq!(s["state"]["status"], "running");
+    assert!(s["state"]["stop_reason"]
+        .as_str()
+        .unwrap()
+        .contains("64 MiB"));
+    assert!(r.join("actions/action-0/stdout.txt").exists());
+    assert!(!cli(&["resume", r.to_str().unwrap()]).status.success());
+    assert_eq!(state(&r)["next_action"], 1);
+}
+#[test]
 fn killed_during_review_checkout_requires_explicit_recovery() {
     use std::{
         thread,

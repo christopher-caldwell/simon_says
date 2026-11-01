@@ -38,6 +38,34 @@ fn default_timeout() -> u64 {
     1800
 }
 
+// Provider event streams can contain tool output. Bound each durable log so a
+// runaway action cannot make the controller allocate an unbounded response.
+const MAX_ACTION_LOG_BYTES: u64 = 64 * 1024 * 1024;
+
+fn terminate_owned(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // Only call while the child is unreaped: its PID cannot yet be reused.
+        if unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) } != 0 {
+            let _ = child.kill();
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn check_log_sizes(stdout: &Path, stderr: &Path) -> Result<()> {
+    for path in [stdout, stderr] {
+        ensure!(
+            fs::metadata(path)?.len() <= MAX_ACTION_LOG_BYTES,
+            "action log {} exceeded the 64 MiB limit; action is uncertain",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InvocationOutcome {
@@ -307,7 +335,7 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
         .with_context(|| format!("invoke {}", plan.program))?;
     // Receipt is diagnostic only: a crash can occur between spawn and this write,
     // and PIDs can be reused. It never authorizes an automatic replay or reset.
-    {
+    let receipt_result = (|| -> Result<()> {
         use std::io::Write;
         let mut receipt = OpenOptions::new()
             .write(true)
@@ -323,30 +351,33 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
         )?;
         receipt.write_all(b"\n")?;
         receipt.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = receipt_result {
+        terminate_owned(&mut child);
+        return Err(error.context("record action process; action is uncertain"));
     }
     #[cfg(unix)]
     let group = child.id() as libc::pid_t;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(plan.timeout_seconds);
     let status = loop {
-        if let Some(status) = child
-            .try_wait()
-            .with_context(|| format!("wait for {}", plan.program))?
-        {
-            break status;
+        if let Err(error) = check_log_sizes(&stdout_path, &stderr_path) {
+            terminate_owned(&mut child);
+            return Err(error);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                terminate_owned(&mut child);
+                return Err(error)
+                    .with_context(|| format!("wait for {}; action is uncertain", plan.program));
+            }
         }
         if std::time::Instant::now() >= deadline {
             // The direct child is still alive and unreaped, so its PID cannot be reused.
             // Stop the action's own process group, then retain Running/uncertain state.
-            #[cfg(unix)]
-            {
-                // If group signalling fails, still stop the direct owned child.
-                if unsafe { libc::kill(-group, libc::SIGKILL) } != 0 {
-                    let _ = child.kill();
-                }
-            }
-            #[cfg(not(unix))]
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_owned(&mut child);
             let _ = fs::File::open(&stdout_path).and_then(|f| f.sync_all());
             let _ = fs::File::open(&stderr_path).and_then(|f| f.sync_all());
             bail!("action timed out after {} seconds; process group was terminated, but external effects and escaped descendants remain uncertain", plan.timeout_seconds);
@@ -401,8 +432,17 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
     }
     fs::File::open(&stdout_path)?.sync_all()?;
     fs::File::open(&stderr_path)?.sync_all()?;
-    let bytes =
-        fs::read(&stdout_path).with_context(|| format!("read {}", stdout_path.display()))?;
+    check_log_sizes(&stdout_path, &stderr_path)?;
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    fs::File::open(&stdout_path)
+        .with_context(|| format!("read {}", stdout_path.display()))?
+        .take(MAX_ACTION_LOG_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 <= MAX_ACTION_LOG_BYTES,
+        "action stdout exceeded the 64 MiB limit; action is uncertain"
+    );
     let text = String::from_utf8(bytes).context("provider stdout is not UTF-8")?;
     let (response, session_id) = if plan.adapter == "command" {
         (Some(text), None)

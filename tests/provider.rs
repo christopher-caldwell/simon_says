@@ -154,6 +154,42 @@ fn timeout_stops_action_without_claiming_success() {
     assert!(dir.path().join("process.json").exists());
 }
 #[test]
+fn oversized_action_log_stops_the_owned_process_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = role("command", None);
+    r.argv = vec![
+        "python3".into(),
+        "-c".into(),
+        "import os,time; os.ftruncate(1, 64*1024*1024+1); time.sleep(30)".into(),
+    ];
+    let plan = prepare(&r, Gate::Worker, "", dir.path(), &dir.path().join("packet")).unwrap();
+    let started = std::time::Instant::now();
+    let error = invoke(&plan, dir.path()).unwrap_err();
+    assert!(error.to_string().contains("64 MiB"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(8));
+    assert!(fs::metadata(dir.path().join("stdout.txt")).unwrap().len() > 64 * 1024 * 1024);
+}
+#[test]
+fn failed_process_receipt_does_not_leave_child_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("child-survived");
+    fs::write(dir.path().join("process.json"), "occupied").unwrap();
+    let mut r = role("command", None);
+    r.argv = vec![
+        "sh".into(),
+        "-c".into(),
+        format!("sleep 1; touch '{}'", marker.display()),
+    ];
+    let plan = prepare(&r, Gate::Worker, "", dir.path(), &dir.path().join("packet")).unwrap();
+    let error = invoke(&plan, dir.path()).unwrap_err();
+    assert!(error.to_string().contains("record action process"));
+    std::thread::sleep(std::time::Duration::from_millis(1300));
+    assert!(
+        !marker.exists(),
+        "child must not continue after receipt failure"
+    );
+}
+#[test]
 fn native_provider_uses_stdin_for_large_prompt_and_bounds_input() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = role("agent", Some("codex"));
