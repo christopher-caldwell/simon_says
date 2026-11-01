@@ -1,0 +1,417 @@
+diff --git a/manabrew-rs/crates/manabrew-engine/src/action.rs b/manabrew-rs/crates/manabrew-engine/src/action.rs
+index 868cf1610..80c1120f3 100644
+--- a/manabrew-rs/crates/manabrew-engine/src/action.rs
++++ b/manabrew-rs/crates/manabrew-engine/src/action.rs
+@@ -170,13 +170,14 @@ impl GameState {
+         apply_move_replacement: bool,
+         is_discard: bool,
+     ) -> ZoneType {
+-        let (src_zone, src_owner, was_permanent, was_land, is_token) = {
++        let (src_zone, src_owner, was_permanent, was_land, was_creature, is_token) = {
+             let card = &self.cards[card_id.index()];
+             (
+                 card.zone,
+                 card.controller,
+                 card.type_line.is_permanent(),
+                 card.is_land(),
++                card.is_creature(),
+                 card.is_token,
+             )
+         };
+@@ -306,10 +307,13 @@ impl GameState {
+         };
+         let tapped_before_replacement = self.card(card_id).tapped;
+         if apply_move_replacement {
+-            if let Some(agents) = agents.as_deref_mut() {
+-                apply_replacements_with_agents(self, agents, &mut moved_event);
++            let result = if let Some(agents) = agents.as_deref_mut() {
++                apply_replacements_with_agents(self, agents, &mut moved_event)
+             } else {
+-                apply_replacements(self, &mut moved_event);
++                apply_replacements(self, &mut moved_event)
++            };
++            if result == ReplacementResult::Prevented {
++                return src_zone;
+             }
+         }
+         let (dest_zone, etb_counter_map, counter_cause, after_replacement_static_abilities) =
+@@ -344,6 +348,9 @@ impl GameState {
+         if host_left_battlefield && was_permanent {
+             self.player_record_permanent_left_battlefield(src_owner);
+         }
++        if host_left_battlefield && was_creature {
++            self.player_mut(src_owner).creatures_left_battlefield_this_turn += 1;
++        }
+         if host_left_battlefield {
+             if self.card(card_id).is_room() {
+                 self.update_lki_snapshot(card_id);
+@@ -1598,6 +1605,7 @@ impl GameState {
+                 self.player_reset_drawn_this_turn(*pid);
+                 let p = self.player_mut(*pid);
+                 p.cast_lki_this_turn.clear();
++                p.creatures_left_battlefield_this_turn = 0;
+                 p.life_started_this_turn_with = p.life;
+                 p.life_gained_this_turn = 0;
+                 p.life_gained_by_team_this_turn = 0;
+@@ -1743,6 +1751,10 @@ impl GameState {
+         let card = &self.cards[card_id.index()];
+         let src_zone = card.zone;
+         let src_owner = card.controller;
++        let was_creature = card.is_creature();
++        if src_zone == ZoneType::Battlefield && was_creature {
++            self.player_mut(src_owner).creatures_left_battlefield_this_turn += 1;
++        }
+ 
+         self.expire_until_lose_control_keyword_changes(card_id);
+         self.cards[card_id.index()].clear_changed_card_keyword_layers();
+diff --git a/manabrew-rs/crates/manabrew-engine/src/player/state.rs b/manabrew-rs/crates/manabrew-engine/src/player/state.rs
+index 626e654bf..b818787c4 100644
+--- a/manabrew-rs/crates/manabrew-engine/src/player/state.rs
++++ b/manabrew-rs/crates/manabrew-engine/src/player/state.rs
+@@ -112,6 +112,7 @@ pub struct PlayerState {
+     pub ring_bearer: Option<CardId>,
+     pub radiation_counters: i32,
+     pub permanents_left_battlefield_this_turn: i32,
++    pub creatures_left_battlefield_this_turn: i32,
+     pub lands_entered_battlefield_this_turn: i32,
+     pub permanents_put_into_graveyard_this_turn: i32,
+     pub completed_dungeons: Vec<CardId>,
+@@ -234,6 +235,7 @@ impl PlayerState {
+             ring_bearer: None,
+             radiation_counters: 0,
+             permanents_left_battlefield_this_turn: 0,
++            creatures_left_battlefield_this_turn: 0,
+             lands_entered_battlefield_this_turn: 0,
+             permanents_put_into_graveyard_this_turn: 0,
+             completed_dungeons: Vec::new(),
+@@ -419,6 +421,7 @@ impl PlayerState {
+         self.ring_bearer = None;
+         self.radiation_counters = 0;
+         self.permanents_left_battlefield_this_turn = 0;
++        self.creatures_left_battlefield_this_turn = 0;
+         self.lands_entered_battlefield_this_turn = 0;
+         self.permanents_put_into_graveyard_this_turn = 0;
+         self.completed_dungeons.clear();
+@@ -488,6 +491,7 @@ impl PlayerState {
+         self.num_rolls_this_turn = 0;
+         self.dice_rolls_this_turn.clear();
+         self.permanents_left_battlefield_this_turn = 0;
++        self.creatures_left_battlefield_this_turn = 0;
+         self.lands_entered_battlefield_this_turn = 0;
+         self.permanents_put_into_graveyard_this_turn = 0;
+         self.tapped_land_for_mana_this_turn = false;
+diff --git a/manabrew-rs/crates/manabrew-engine/src/svar/mod.rs b/manabrew-rs/crates/manabrew-engine/src/svar/mod.rs
+index da578be98..2cb931b75 100644
+--- a/manabrew-rs/crates/manabrew-engine/src/svar/mod.rs
++++ b/manabrew-rs/crates/manabrew-engine/src/svar/mod.rs
+@@ -1526,6 +1526,9 @@ pub fn resolve_count_svar_for_sa(
+     }
+     let (body, operators) = expr.split_once('/').unwrap_or((expr, ""));
+     let count = match body {
++        "Count$LeftBattlefieldThisTurn Creature.YouCtrl" => {
++            Some(game.player(controller).creatures_left_battlefield_this_turn)
++        }
+         "Count$ResolvedThisTurn" => Some(
+             sa.source
+                 .map(|id| game.card(id).get_ability_resolved_this_turn(Some(sa)))
+diff --git a/manabrew-rs/crates/manabrew-engine/tests/bottom_departure.rs b/manabrew-rs/crates/manabrew-engine/tests/bottom_departure.rs
+new file mode 100644
+index 000000000..5de610358
+--- /dev/null
++++ b/manabrew-rs/crates/manabrew-engine/tests/bottom_departure.rs
+@@ -0,0 +1,100 @@
++use forge_foundation::{CardTypeLine, ColorSet, ManaCost, ZoneType};
++use manabrew_engine::{
++    card::CardInstance,
++    game::GameState,
++    ids::{CardId, PlayerId},
++    svar::resolve_count_svar,
++};
++#[test]
++fn putting_creature_on_bottom_counts_departure() {
++    let mut game = GameState::new(&["Alice", "Bob"], 20);
++    let player = PlayerId(0);
++    let card = game.create_card(CardInstance::new(
++        CardId(0),
++        "Creature".into(),
++        player,
++        CardTypeLine::parse("Creature"),
++        ManaCost::no_cost(),
++        ColorSet::COLORLESS,
++        Some(2),
++        Some(2),
++        vec![],
++        vec![],
++    ));
++    game.move_card(card, ZoneType::Battlefield, player);
++    game.put_on_bottom_of_library(card, player);
++    assert_eq!(game.card(card).zone, ZoneType::Library);
++    assert_eq!(
++        resolve_count_svar(
++            "Count$LeftBattlefieldThisTurn Creature.YouCtrl",
++            &game,
++            card,
++            player
++        ),
++        1
++    );
++}
++
++#[test]
++fn bottom_counts_battlefield_controller_and_tokens_but_not_other_zones_or_lands() {
++    let mut game = GameState::new(&["Alice", "Bob"], 20);
++    let (owner, controller) = (PlayerId(0), PlayerId(1));
++    let mut token = CardInstance::new(
++        CardId(0),
++        "Token".into(),
++        owner,
++        CardTypeLine::parse("Creature"),
++        ManaCost::no_cost(),
++        ColorSet::COLORLESS,
++        Some(2),
++        Some(2),
++        vec![],
++        vec![],
++    );
++    token.is_token = true;
++    let card = game.create_card(token);
++    game.move_card(card, ZoneType::Battlefield, controller);
++    game.put_on_bottom_of_library(card, owner);
++    assert_eq!(
++        resolve_count_svar(
++            "Count$LeftBattlefieldThisTurn Creature.YouCtrl",
++            &game,
++            card,
++            controller
++        ),
++        1
++    );
++    assert_eq!(
++        resolve_count_svar(
++            "Count$LeftBattlefieldThisTurn Creature.YouCtrl",
++            &game,
++            card,
++            owner
++        ),
++        0
++    );
++    let land = game.create_card(CardInstance::new(
++        CardId(0),
++        "Land".into(),
++        controller,
++        CardTypeLine::parse("Land"),
++        ManaCost::no_cost(),
++        ColorSet::COLORLESS,
++        None,
++        None,
++        vec![],
++        vec![],
++    ));
++    game.move_card(land, ZoneType::Battlefield, controller);
++    game.put_on_bottom_of_library(land, controller);
++    game.put_on_bottom_of_library(land, controller);
++    assert_eq!(
++        resolve_count_svar(
++            "Count$LeftBattlefieldThisTurn Creature.YouCtrl",
++            &game,
++            card,
++            controller
++        ),
++        1
++    );
++}
+diff --git a/manabrew-rs/crates/manabrew-engine/tests/left_battlefield_this_turn.rs b/manabrew-rs/crates/manabrew-engine/tests/left_battlefield_this_turn.rs
+new file mode 100644
+index 000000000..9f1be593b
+--- /dev/null
++++ b/manabrew-rs/crates/manabrew-engine/tests/left_battlefield_this_turn.rs
+@@ -0,0 +1,72 @@
++use forge_foundation::{CardTypeLine, ColorSet, ManaCost, ZoneType};
++use manabrew_engine::{
++    card::CardInstance,
++    game::GameState,
++    ids::{CardId, PlayerId},
++    svar::resolve_count_svar,
++};
++
++fn card(owner: PlayerId, kind: &str, token: bool) -> CardInstance {
++    let mut card = CardInstance::new(
++        CardId(0),
++        "Test".into(),
++        owner,
++        CardTypeLine::parse(kind),
++        ManaCost::no_cost(),
++        ColorSet::COLORLESS,
++        None,
++        None,
++        vec![],
++        vec![],
++    );
++    card.is_token = token;
++    card
++}
++
++fn count(game: &GameState, source: CardId, player: PlayerId) -> i32 {
++    resolve_count_svar(
++        "Count$LeftBattlefieldThisTurn Creature.YouCtrl",
++        game,
++        source,
++        player,
++    )
++}
++
++#[test]
++fn counts_each_creature_departure_for_its_controller_and_resets() {
++    let mut game = GameState::new(&["Alice", "Bob"], 20);
++    let (a, b) = (PlayerId(0), PlayerId(1));
++    let source = game.create_card(card(a, "Sorcery", false));
++    let creature = game.create_card(card(b, "Creature", false));
++    game.move_card(creature, ZoneType::Battlefield, a);
++    assert_eq!(game.card(creature).controller, a);
++    game.move_card(creature, ZoneType::Exile, b);
++    assert_eq!(count(&game, source, a), 1);
++    assert_eq!(count(&game, source, b), 0);
++    game.move_card(creature, ZoneType::Battlefield, b);
++    game.move_card(creature, ZoneType::Hand, b);
++    assert_eq!(count(&game, source, a), 1);
++    assert_eq!(count(&game, source, b), 1);
++    game.new_turn_for_player(a);
++    assert_eq!(count(&game, source, a), 0);
++    assert_eq!(count(&game, source, b), 0);
++}
++
++#[test]
++fn counts_tokens_and_battlefield_characteristics_but_not_noncreatures() {
++    let mut game = GameState::new(&["Alice", "Bob"], 20);
++    let a = PlayerId(0);
++    let source = game.create_card(card(a, "Sorcery", false));
++    let token = game.create_card(card(a, "Creature", true));
++    game.move_card(token, ZoneType::Battlefield, a);
++    game.move_card(token, ZoneType::Graveyard, a);
++    let land = game.create_card(card(a, "Land", false));
++    game.move_card(land, ZoneType::Battlefield, a);
++    game.move_card(land, ZoneType::Graveyard, a);
++    let animated = game.create_card(card(a, "Land", false));
++    game.move_card(animated, ZoneType::Battlefield, a);
++    game.card_mut(animated).type_line = CardTypeLine::parse("Land Creature");
++    game.move_card(animated, ZoneType::Exile, a);
++    game.card_mut(animated).type_line = CardTypeLine::parse("Land");
++    assert_eq!(count(&game, source, a), 2);
++}
+diff --git a/manabrew-rs/crates/manabrew-engine/tests/prevented_zone_move.rs b/manabrew-rs/crates/manabrew-engine/tests/prevented_zone_move.rs
+new file mode 100644
+index 000000000..371d2fe38
+--- /dev/null
++++ b/manabrew-rs/crates/manabrew-engine/tests/prevented_zone_move.rs
+@@ -0,0 +1,98 @@
++use forge_foundation::{CardTypeLine, ColorSet, ManaCost, ZoneType};
++use manabrew_engine::{
++    card::CardInstance,
++    game::GameState,
++    ids::{CardId, PlayerId},
++    replacement::{replacement_handler::apply_replacements, ReplacementEvent, ReplacementResult},
++    svar::resolve_count_svar,
++};
++
++#[test]
++fn prevented_creature_departure_is_not_counted() {
++    let mut game = GameState::new(&["Alice", "Bob"], 20);
++    let player = PlayerId(0);
++    let replacement = "R$ Event$ Moved | Destination$ Graveyard | Origin$ Battlefield | ValidCard$ Card.Self | ReplacementResult$ Prevented";
++    let card = game.create_card(CardInstance::new(
++        CardId(0),
++        "Protected".into(),
++        player,
++        CardTypeLine::parse("Creature"),
++        ManaCost::no_cost(),
++        ColorSet::COLORLESS,
++        Some(2),
++        Some(2),
++        vec![],
++        vec![replacement.into()],
++    ));
++    game.move_card(card, ZoneType::Battlefield, player);
++    let mut event = ReplacementEvent::Moved {
++        card,
++        origin: ZoneType::Battlefield,
++        destination: ZoneType::Graveyard,
++        is_discard: false,
++        counter_map: None,
++        counter_cause: None,
++        counter_is_effect: false,
++        after_replacement_static_abilities: Vec::new(),
++    };
++    assert_eq!(
++        apply_replacements(&mut game, &mut event),
++        ReplacementResult::Prevented
++    );
++    game.move_card(card, ZoneType::Graveyard, player);
++    assert_eq!(
++        game.card(card).zone,
++        ZoneType::Battlefield,
++        "prevented move must leave card on battlefield"
++    );
++    assert_eq!(
++        resolve_count_svar(
++            "Count$LeftBattlefieldThisTurn Creature.YouCtrl",
++            &game,
++            card,
++            player
++        ),
++        0
++    );
++}
++
++#[test]
++fn redirected_departure_is_counted_and_same_zone_is_not() {
++    let mut game = GameState::new(&["Alice", "Bob"], 20);
++    let player = PlayerId(0);
++    let redirect = "R$ Event$ Moved | Destination$ Graveyard | Origin$ Battlefield | ValidCard$ Card.Self | NewDestination$ Exile";
++    let card = game.create_card(CardInstance::new(
++        CardId(0),
++        "Redirect".into(),
++        player,
++        CardTypeLine::parse("Creature"),
++        ManaCost::no_cost(),
++        ColorSet::COLORLESS,
++        Some(2),
++        Some(2),
++        vec![],
++        vec![redirect.into()],
++    ));
++    game.move_card(card, ZoneType::Battlefield, player);
++    game.move_card(card, ZoneType::Battlefield, player);
++    assert_eq!(
++        resolve_count_svar(
++            "Count$LeftBattlefieldThisTurn Creature.YouCtrl",
++            &game,
++            card,
++            player
++        ),
++        0
++    );
++    game.move_card(card, ZoneType::Graveyard, player);
++    assert_eq!(game.card(card).zone, ZoneType::Exile);
++    assert_eq!(
++        resolve_count_svar(
++            "Count$LeftBattlefieldThisTurn Creature.YouCtrl",
++            &game,
++            card,
++            player
++        ),
++        1
++    );
++}
+diff --git a/repair.json b/repair.json
+new file mode 100644
+index 000000000..69f2898a2
+--- /dev/null
++++ b/repair.json
+@@ -0,0 +1,7 @@
++{
++  "issue_id": "MAGIC-LEFT-BATTLEFIELD",
++  "cause": "The Count expression had no evaluator, and the existing departure statistic recorded only all permanents, without creature characteristics.",
++  "fix": "Count creature departures using the battlefield creature status and controller captured by the move path, including tokens and each separate departure. Reset the count for every player at the global turn boundary and resolve the requested Creature.YouCtrl expression, including existing arithmetic operators. A separate independent review then reproduced and corrected explicit prevented moves and the separate bottom-of-library departure count path.",
++  "verification": "With the new integration tests and baseline source, CARGO_TARGET_DIR=\"$SIMON_SCRATCH/target\" DYLD_SHARED_REGION=avoid cargo test -p manabrew-engine --test left_battlefield_this_turn failed both tests with the unrecognized expression. With the repair, the same command passed 2 tests. CARGO_TARGET_DIR=\"$SIMON_SCRATCH/target\" DYLD_SHARED_REGION=avoid cargo test -p manabrew-engine --test left_battlefield_this_turn --test zone_change_effects passed the 2 scoped tests but the neighboring suite aborted on a default test-thread stack overflow. RUST_MIN_STACK=16777216 CARGO_TARGET_DIR=\"$SIMON_SCRATCH/target\" DYLD_SHARED_REGION=avoid cargo test -p manabrew-engine --test zone_change_effects passed all 10 tests. Independent candidate review confirmed the replacement handler returned Prevented while the original candidate still moved the card, and confirmed bottom-of-library returned zero instead of one. Both focused cases pass after correction along with redirect, same-zone, token/controller and noncreature checks. The neighboring zone suite had a random shuffle assertion failure once, then passed on rerun; this remains a flaky-test concern.",
++  "limitations": "Only the requested selector is implemented, not arbitrary LeftBattlefieldThisTurn filters. Tests exercise deterministic engine moves and a directly changed battlefield type; they do not establish every replacement or continuous-effect interaction, replay retired traces, test archived card scripts, run games, or establish candidate runtime acceptance. The count uses the move path's existing pre-replacement snapshot and therefore inherits its handling of replacement effects. Engine-wide correctness and migration are not established. The existing bottom-of-library helper still bypasses generic replacement/trigger machinery and has pre-existing token lifecycle limitations; this narrow change only updates the count there. Other prevention callers, discard triggers, simultaneous departures and replacement/continuous-effect last-known information remain unverified."
++}
