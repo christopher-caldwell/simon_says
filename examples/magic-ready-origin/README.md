@@ -1,0 +1,14 @@
+# Bounded Origin warning follow-up
+
+This experimental authoring example extends `magic-ready-flow` with a second, workflow-defined Fixer scope. It does not add Magic logic to the controller. After the first scoped repair, isolated runtime build and new ten-game batch, the configured Analyzer can report a specific Origin of Metalbending failed-offer observation. A separate mechanical Reviewer verifies the native game evidence, matches the recorded Origin trace locator and SHA-256, and independently runs three frozen tests against the actual archived cards and current exact source. Only when the Analyzer selects `investigate`, the live trace contains the specified insufficient-context warning, and the separate no-legal-mode control fails in the expected way while both positive controls pass may the frozen route dispatch the configured Fixer.
+
+**Correlation is not proof of the live warning's cause.** Retained traces do not establish full derived GameState. The target is the independently reproduced action-space defect, not a claim that all card-play failures share that cause. Explicit cancellations, target-invalid fizzles, and other warnings remain separate. Unknown/mismatched controls fail closed. The Origin Fixer's exact commit is independently reviewed with the frozen three controls, then a new isolated runtime is built from that exact accepted commit and another bounded batch is run. Remaining warnings route to a fresh Analyzer draft and durable escalation; they are not silently called clean. A no-warning completion still does not certify full game rules or production readiness.
+
+This is an experimental authoring fixture, not a deployment. Tests and source probes use private action scratch and never rewrite the candidate checkout or source reference repos. Cargo runs offline against cached dependencies; native card archive identity is verified. Source builds and native games can consume many minutes and gigabytes; external effects are not undone by Git. After uncertain interruption, preserve the evidence and follow explicit recovery rather than replaying automatically. The optional `--seed` selects a separate diagnostic; a matching before/after seed is a controlled comparison, not independent sampling. No runtime installation, research publication, or raw evidence retirement is authorized by this example.
+
+```sh
+python3 -B examples/magic-ready-origin/test_contracts.py -v
+python3 -B examples/magic-ready-origin/prepare.py /absolute/prepared-game-project /absolute/collection-plan /absolute/new/project --seed unique-diagnostic
+simon-says validate /absolute/new/project/workflow.toml
+simon-says run /absolute/new/project/workflow.toml --project /absolute/new/project --run-dir /absolute/new/run --context /absolute/new/project/original-task.txt
+```

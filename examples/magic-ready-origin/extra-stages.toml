@@ -1,0 +1,62 @@
+
+[stages.repair_origin]
+worker = "fixer"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/fix-origin.md"
+inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json", "triage.json"]
+protected_inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json", "triage.json"]
+outputs = ["warning-repair.json"]
+output_schema = "simon-four/warning-repair.schema.json"
+on_pass = "build_origin"
+max_review_cycles = 2
+
+[stages.build_origin]
+worker = "builder"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/build-stage.md"
+inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json", "triage.json", "warning-repair.json", "simon-game/assets.json"]
+protected_inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json", "triage.json", "warning-repair.json"]
+outputs = ["native-runtime-origin.json"]
+output_schema = "simon-game/runtime.schema.json"
+on_pass = "simulate_origin"
+max_review_cycles = 2
+
+[stages.simulate_origin]
+worker = "simulator"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/verify-stage.md"
+inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json", "triage.json", "warning-repair.json", "native-runtime-origin.json", "simon-game/assets.json", "simon-game/game-config.json", "decks/angels/checkpoint_2/deck_list.csv", "decks/angels/checkpoint_2/GUIDE.md", "decks/miirym/checkpoint_2/deck_list.csv", "decks/miirym/checkpoint_2/GUIDE.md", "decks/azula/checkpoint_1/deck_list.csv", "decks/azula/checkpoint_1/GUIDE.md", "decks/aang/checkpoint_1/deck_list.csv", "decks/aang/checkpoint_1/GUIDE.md"]
+protected_inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json", "triage.json", "warning-repair.json", "native-runtime-origin.json"]
+outputs = ["verification-origin.json"]
+output_schema = "simon-game/game.schema.json"
+on_pass = "complete"
+max_review_cycles = 2
+[stages.simulate_origin.routes]
+clean = "complete"
+warnings = "triage_final"
+
+[stages.triage_final]
+worker = "analyzer"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/triage-final.md"
+inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json", "triage.json", "warning-repair.json", "native-runtime-origin.json", "verification-origin.json"]
+protected_inputs = ["design.json", "game.json", "analysis.json", "repair.json", "native-runtime.json", "verification.json", "triage.json", "warning-repair.json", "native-runtime-origin.json", "verification-origin.json"]
+outputs = ["triage-final.json"]
+output_schema = "simon-four/triage-final.schema.json"
+on_pass = "escalate_final"
+max_review_cycles = 2
+
+[stages.escalate_final]
+worker = "escalation"
+reviewer = "verifier"
+unblocker = "stop"
+instructions = "simon-four/triage-final.md"
+inputs = ["triage-final.json"]
+protected_inputs = ["triage-final.json"]
+outputs = ["escalation-final-never.json"]
+on_pass = "complete"
+max_review_cycles = 1
