@@ -1,0 +1,45 @@
+schema_version = 1
+name = "data-dispatch"
+purpose = "Audit and normalize an expense report using workflow-defined roles."
+start = "audit"
+max_stage_transitions = 4
+frozen_project_files = ["workflow.toml", "action.py", "instructions.md", "audit.schema.json", "repair.schema.json"]
+
+[roles.auditor]
+kind = "command"
+argv = ["python3", "-B", "action.py", "auditor"]
+[roles.normalizer]
+kind = "command"
+argv = ["python3", "-B", "action.py", "normalizer"]
+[roles.checker]
+kind = "command"
+argv = ["python3", "-B", "action.py", "checker"]
+[roles.stop]
+kind = "command"
+argv = ["python3", "-B", "action.py", "stop"]
+
+[stages.audit]
+worker = "auditor"
+reviewer = "checker"
+unblocker = "stop"
+instructions = "instructions.md"
+inputs = ["records.json"]
+outputs = ["audit.json"]
+output_schema = "audit.schema.json"
+on_pass = "complete"
+max_review_cycles = 2
+[stages.audit.routes]
+needs_cleanup = "normalize"
+done = "complete"
+
+[stages.normalize]
+worker = "normalizer"
+reviewer = "checker"
+unblocker = "stop"
+instructions = "instructions.md"
+inputs = ["records.json", "audit.json"]
+protected_inputs = ["audit.json"]
+outputs = ["repair.json"]
+output_schema = "repair.schema.json"
+on_pass = "audit"
+max_review_cycles = 2
