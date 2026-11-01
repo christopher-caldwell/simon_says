@@ -193,3 +193,25 @@ fn verifies_all_batches_of_tracked_files() {
     fs::write(w.path.join("file-255"), "different").unwrap();
     assert!(w.verify_candidate(&w.baseline, &w.baseline).is_err());
 }
+
+#[test]
+fn managed_worktree_rejects_ignored_files_but_source_ignored_files_are_preserved() {
+    let (_tmp, repo, run) = fixture();
+    fs::write(repo.join(".gitignore"), "ignored.tmp\n").unwrap();
+    command(&repo, &["add", ".gitignore"]);
+    command(&repo, &["commit", "-qm", "ignore local files"]);
+    fs::write(repo.join("ignored.tmp"), "user-owned ignored data").unwrap();
+    let w = Worktree::create(&repo, &run).unwrap();
+    assert!(!w.path.join("ignored.tmp").exists());
+    w.verify_candidate(&w.baseline, &w.baseline).unwrap();
+    fs::write(w.path.join("ignored.tmp"), "unreviewed runtime data").unwrap();
+    assert!(
+        w.verify_candidate(&w.baseline, &w.baseline).is_err(),
+        "ignored content in an active worktree must not survive a verified checkpoint"
+    );
+    assert!(w.verify_clean().is_err());
+    assert_eq!(
+        fs::read_to_string(repo.join("ignored.tmp")).unwrap(),
+        "user-owned ignored data"
+    );
+}

@@ -301,6 +301,31 @@ fn clean(repo: &Path) -> Result<()> {
     verify_tracked_contents(repo)?;
     Ok(())
 }
+// An ignored file in a managed checkout is not part of the Git candidate,
+// but a later Worker could still read or execute it. Reviewers get a fresh
+// checkout and therefore could not inspect those bytes. Reject all ignored
+// content in managed worktrees; never apply this rule to the user's source
+// checkout, where ignored files are expected and remain untouched.
+fn clean_managed(repo: &Path) -> Result<()> {
+    clean(repo)?;
+    let output = git(
+        repo,
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=matching",
+            "--ignore-submodules=none",
+        ],
+    )?;
+    ensure!(
+        output.stdout.is_empty(),
+        "managed worktree contains ignored or untracked files; preserve them and reconcile explicitly"
+    );
+    Ok(())
+}
+
 /// Frozen repository identity and pinned baseline recorded before checkout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -635,7 +660,7 @@ impl Worktree {
     }
     pub fn verify_clean(&self) -> Result<()> {
         self.verify_owned()?;
-        clean(&self.path)
+        clean_managed(&self.path)
     }
     /// Reject ignored as well as untracked or tracked mutations in a fresh review checkout.
     pub fn verify_pristine(&self) -> Result<()> {
@@ -667,7 +692,7 @@ impl Worktree {
             git_text(&self.path, &["rev-parse", "--verify", "HEAD^{commit}"])? == candidate,
             "candidate does not match worktree HEAD"
         );
-        clean(&self.path)
+        clean_managed(&self.path)
     }
     /// Explicitly discard tracked changes in this verified worktree and restore
     /// a known checkpoint. Any untracked *or ignored* files cause refusal: Git

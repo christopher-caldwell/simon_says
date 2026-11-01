@@ -215,3 +215,45 @@ fn missing_or_undeclared_reviewer_route_cannot_dispatch_a_role_or_replay() {
         assert!(!run_dir.join("actions/action-2").exists());
     }
 }
+
+#[test]
+fn ignored_worker_file_prevents_review_and_is_not_deleted_by_reset() {
+    let (_temp, repo, run_dir) = fixture("repairable", false);
+    fs::write(repo.join(".gitignore"), "ignored-helper.tmp\n").unwrap();
+    let action_path = repo.join("action.py");
+    let code = fs::read_to_string(&action_path).unwrap().replace(
+        "candidate = commit([\"simulation.json\"], \"Record simulated observation\")",
+        "Path(\"ignored-helper.tmp\").write_text(\"unreviewed content\")\n        candidate = commit([\"simulation.json\"], \"Record simulated observation\")",
+    );
+    assert!(code.contains("unreviewed content"));
+    fs::write(&action_path, code).unwrap();
+    git(&repo, &["add", ".gitignore", "action.py"]);
+    git(&repo, &["commit", "-qm", "fixture with ignored side file"]);
+    let output = run(&repo, &run_dir);
+    assert!(
+        !output.status.success(),
+        "ignored side file must prevent candidate acceptance"
+    );
+    let state = status(&run_dir);
+    assert_eq!(state["state"]["status"], "running");
+    assert_eq!(state["state"]["gate"], "worker");
+    assert!(!run_dir.join("actions/action-1").exists());
+    let ignored = run_dir.join("worktree/ignored-helper.tmp");
+    assert_eq!(fs::read_to_string(&ignored).unwrap(), "unreviewed content");
+    let resumed = cli(&["resume", run_dir.to_str().unwrap()]);
+    assert!(
+        !resumed.status.success(),
+        "uncertain action must not replay"
+    );
+    let reset = cli(&[
+        "reset",
+        run_dir.to_str().unwrap(),
+        "--acknowledge-external-effects",
+    ]);
+    assert!(
+        !reset.status.success(),
+        "reset must not remove ignored content"
+    );
+    assert_eq!(fs::read_to_string(&ignored).unwrap(), "unreviewed content");
+    assert!(!repo.join("ignored-helper.tmp").exists());
+}

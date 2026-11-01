@@ -36,6 +36,7 @@
 | Reviewer wrong inspected commit | Fail closed; no stage advancement |
 | Invalid action ID/outcome/JSON | Fail closed with reset-required or equivalent mechanically safe stop |
 | Wrong Git HEAD, non-descendant commit, dirty candidate | Fail closed and retain last safe checkpoint |
+| Worker leaves an ignored file in its managed checkout | Reject the candidate before review; preserve the file for explicit reconciliation and never affect ignored files in the source checkout |
 | Required output omitted | Fail closed before review or transition |
 
 ## Recovery
