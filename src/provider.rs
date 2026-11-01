@@ -91,6 +91,9 @@ pub fn prepare(
         (1..=86400).contains(&role.timeout_seconds.unwrap_or_else(default_timeout)),
         "timeout_seconds must be 1..=86400"
     );
+    if role.kind == "agent" {
+        ensure!(prompt.len() <= 64 * 1024, "action packet exceeds the 64 KiB native-provider prompt limit; shorten task context, instructions, schema or feedback");
+    }
     let cwd = cwd
         .canonicalize()
         .with_context(|| format!("canonicalize invocation cwd {}", cwd.display()))?;
@@ -427,4 +430,10 @@ fn content_text(value: Option<&Value>) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Claude Worker policy may require its own Bash sandbox, including via merged
+/// user settings. Do not guess its effective permissions or disable a sandbox.
+pub fn requires_nested_sandbox_probe(role: &Role, gate: Gate) -> bool {
+    role.kind == "agent" && role.adapter.as_deref() == Some("claude") && gate == Gate::Worker
 }

@@ -1,0 +1,1 @@
+{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "additionalProperties": false, "required": ["processed_ids", "disposition", "analysis_preserved"], "properties": {"processed_ids": {"type": "array"}, "disposition": {"type": "string"}, "analysis_preserved": {"type": "string"}}}

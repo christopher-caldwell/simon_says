@@ -54,18 +54,29 @@ impl RunStore {
         Self::lock(&root.canonicalize().context("run directory not found")?)
     }
     fn lock(root: &Path) -> Result<Self> {
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(root.join("lock"))?;
+        let path = root.join("lock");
+        if let Ok(meta) = fs::symlink_metadata(&path) {
+            ensure!(
+                meta.is_file() && !meta.file_type().is_symlink(),
+                "unsafe run lock"
+            );
+        }
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let lock = options.open(path)?;
         lock.try_lock_exclusive()
             .context("run is already open by another process")?;
-        Ok(Self {
+        let store = Self {
             root: root.to_owned(),
             _lock: lock,
-        })
+        };
+        store.verify_lock()?;
+        Ok(store)
     }
     pub fn verify_lock(&self) -> Result<()> {
         #[cfg(unix)]
@@ -218,6 +229,8 @@ impl RunStore {
             Status::Preparing => bail!("action {:?} preparation is uncertain after interruption or failure; explicit reset is required; external side effects are not undone", record.state.action_id),
             Status::Running => bail!("action {:?} is uncertain after interruption or failure; explicit reset is required; external side effects are not undone", record.state.action_id),
             Status::Stopped => bail!("run stopped: {}; explicit recovery is required", record.state.stop_reason.as_deref().unwrap_or("unspecified")),
+            Status::AwaitingApproval => bail!("run awaits explicit approval of its recorded accepted checkpoint and workflow digest"),
+            Status::ApprovalChecking => bail!("approval verification is uncertain; explicit reset is required before reapproval"),
             Status::Complete => bail!("run is already complete"),
             Status::Ready => Ok(()),
         }

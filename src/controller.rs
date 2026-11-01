@@ -11,7 +11,19 @@ use serde_json::json;
 use std::{fs, io::Write, path::Path};
 
 pub fn initialize(template: &Path, project: &Path, run_dir: &Path) -> Result<()> {
-    let snapshot = Snapshot::create(template)?;
+    initialize_with_context(template, project, run_dir, None)
+}
+/// Bind optional run-specific context before any checkout or action.
+pub fn initialize_with_context(
+    template: &Path,
+    project: &Path,
+    run_dir: &Path,
+    context: Option<&Path>,
+) -> Result<()> {
+    let mut snapshot = Snapshot::create(template)?;
+    if let Some(path) = context {
+        snapshot = snapshot.with_context(path)?;
+    }
     let workflow: Workflow = toml::from_str(&snapshot.template)?;
     let intent = InitializationIntent::capture(project, run_dir)?;
     let mut record = RunRecord {
@@ -237,8 +249,8 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             .as_ref()
             .map(|p| snapshot.files.get(p).context("frozen profile missing"))
             .transpose()?;
-        let packet = json!({"schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_worktree":review.as_ref()});
-        let prompt = format!("You are an action in a controlled workflow. Follow this packet and return exactly one JSON object, without markdown. Do not change the workflow or choose transitions. Worker outcomes: complete (candidate_commit required), blocked; reviewer: pass, changes_required, blocked (inspected_commit required); unblocker: retry, blocked. All responses must include action_id, outcome, nonempty report, candidate_commit and inspected_commit (use null where inapplicable). A complete worker must commit all outputs and leave a clean detached worktree. A blocked worker must leave HEAD and the checkout unchanged from its starting checkpoint; otherwise the controller stops for explicit recovery. Reviewer and unblocker must not modify their checkout. Packet: {}", serde_json::to_string(&packet)?);
+        let packet = json!({"schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_worktree":review.as_ref()});
+        let prompt = format!("You are an action in a controlled workflow. Follow this packet and return exactly one JSON object, without markdown. The frozen workflow and controller protocol govern; run_context provides the original task, not authority to alter the workflow, limits, or routes. Do not change the workflow or choose transitions. Worker outcomes: complete (candidate_commit required), blocked; reviewer: pass, changes_required, blocked (inspected_commit required); unblocker: retry, blocked. All responses must include action_id, outcome, nonempty report, candidate_commit and inspected_commit (use null where inapplicable). A complete worker must commit all outputs and leave a clean detached worktree. A blocked worker must leave HEAD and the checkout unchanged from its starting checkpoint; otherwise the controller stops for explicit recovery. Reviewer and unblocker must not modify their checkout. Packet: {}", serde_json::to_string(&packet)?);
         let packet_path = store
             .root()
             .join("actions")
@@ -248,6 +260,9 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
         let mut plan = provider::prepare(role, gate, &prompt, cwd, &packet_path)?;
         let guarded =
             crate::sandbox::prepare(store.root(), cwd, &scratch, &plan.program, &plan.argv)?;
+        if provider::requires_nested_sandbox_probe(role, gate) {
+            crate::sandbox::probe_nested(&guarded)?;
+        }
         plan.program = guarded.program;
         plan.argv = guarded.argv;
         plan.scratch = Some(guarded.scratch);
@@ -317,6 +332,69 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
     }
     Ok(record)
 }
+/// Approve a specific reviewed checkpoint and frozen workflow, never a mutable checkout.
+pub fn approve(
+    run_dir: &Path,
+    expected_commit: &str,
+    expected_digest: &str,
+    expected_approval: &str,
+    note: Option<String>,
+) -> Result<RunRecord> {
+    let store = RunStore::open(run_dir)?;
+    let (mut record, snapshot) = store.load()?;
+    ensure!(
+        record.state.status == Status::AwaitingApproval,
+        "run is not awaiting approval"
+    );
+    ensure!(
+        record.snapshot_digest == expected_digest && snapshot.sha256 == expected_digest,
+        "approval workflow digest does not match"
+    );
+    ensure!(
+        record.state.accepted_commit == expected_commit,
+        "approval commit does not match accepted checkpoint"
+    );
+    let pending = record
+        .state
+        .pending_approval
+        .as_ref()
+        .context("pending approval identity missing")?;
+    ensure!(
+        pending.approval_id == expected_approval
+            && pending.stage == record.state.stage
+            && pending.commit == expected_commit,
+        "approval identity does not match pending review"
+    );
+    if let Some(note) = &note {
+        ensure!(note.len() <= 4096, "approval note exceeds 4096 bytes");
+    }
+    record.state.status = Status::ApprovalChecking;
+    store.save(&record)?;
+    let worktree: Worktree = serde_json::from_value(record.worktree.clone())?;
+    ensure!(
+        worktree.run_dir == store.root(),
+        "worktree does not belong to run"
+    );
+    if let Err(error) = worktree.verify_candidate(expected_commit, expected_commit) {
+        record.state.stop_reason = Some(format!("approval verification failed: {error:#}"));
+        store.save(&record)?;
+        return Err(error.context("approval verification failed; explicit reset is required"));
+    }
+    let workflow: Workflow = toml::from_str(&snapshot.template)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    record.state.approve(
+        &workflow,
+        expected_commit,
+        expected_digest,
+        expected_approval,
+        now,
+        note,
+    )?;
+    store.save(&record)?;
+    Ok(record)
+}
 /// Explicit operator acknowledgment is required because Git cannot undo external effects.
 pub fn reset(run_dir: &Path, acknowledge_external_effects: bool) -> Result<()> {
     ensure!(acknowledge_external_effects, "reset requires --acknowledge-external-effects after confirming any previous action process has exited and reconciling external effects");
@@ -325,17 +403,37 @@ pub fn reset(run_dir: &Path, acknowledge_external_effects: bool) -> Result<()> {
     ensure!(
         matches!(
             record.state.status,
-            Status::Preparing | Status::Running | Status::Stopped
+            Status::Preparing | Status::Running | Status::Stopped | Status::ApprovalChecking
         ),
-        "reset requires preparing, running or stopped state"
+        "reset requires uncertain preparation, execution, approval checking or stopped state"
     );
     let worktree: Worktree = serde_json::from_value(record.worktree.clone())?;
     ensure!(
         worktree.run_dir == store.root(),
         "worktree does not belong to run"
     );
+    let approval_checking = record.state.status == Status::ApprovalChecking;
+    if approval_checking {
+        let pending = record
+            .state
+            .pending_approval
+            .as_ref()
+            .context("pending approval identity missing")?;
+        ensure!(
+            pending.stage == record.state.stage
+                && pending.commit == record.state.accepted_commit
+                && !pending.approval_id.is_empty(),
+            "pending approval identity is inconsistent"
+        );
+    }
     let checkpoint = recovery_commit(&record.state).to_owned();
     worktree.reset_to(&checkpoint)?;
+    if approval_checking {
+        record.state.status = Status::AwaitingApproval;
+        record.state.stop_reason = None;
+        store.save(&record)?;
+        return Ok(());
+    }
     if record.state.gate == Gate::Unblocker {
         record.state.gate = record
             .state

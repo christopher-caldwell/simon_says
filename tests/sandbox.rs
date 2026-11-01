@@ -123,3 +123,36 @@ mod macos {
         assert!(sandbox::prepare(&r, &c, &link, "/bin/true", &[]).is_err());
     }
 }
+#[cfg(target_os = "macos")]
+#[test]
+fn nested_probe_matches_real_capability_of_the_exact_outer_profile() {
+    use std::{fs, process::Command};
+    let tmp = tempfile::tempdir().unwrap();
+    let run = tmp.path().canonicalize().unwrap().join("run");
+    let cwd = run.join("worktree");
+    let scratch = run.join("actions/action-0/scratch");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&scratch).unwrap();
+    let plan = sandbox::prepare(&run, &cwd, &scratch, "/usr/bin/true", &[]).unwrap();
+    let direct = Command::new("/usr/bin/sandbox-exec")
+        .args([
+            "-p",
+            &plan.argv[1],
+            "--",
+            "/usr/bin/sandbox-exec",
+            "-p",
+            "(version 1)(allow default)",
+            "--",
+            "/usr/bin/true",
+        ])
+        .output()
+        .unwrap();
+    let probed = sandbox::probe_nested(&plan);
+    assert_eq!(probed.is_ok(), direct.status.success());
+    if let Err(e) = probed {
+        assert!(e.to_string().contains("no model was invoked"));
+    }
+    let mut forged = plan;
+    forged.program = "/bin/sh".into();
+    assert!(sandbox::probe_nested(&forged).is_err());
+}

@@ -151,3 +151,36 @@ fn timeout_stops_action_without_claiming_success() {
     assert!(started.elapsed() < std::time::Duration::from_secs(8));
     assert!(dir.path().join("process.json").exists());
 }
+#[test]
+fn native_provider_rejects_oversized_argv_prompt_before_invocation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = role("agent", Some("codex"));
+    r.profile = Some("profile.md".into());
+    let error = prepare(
+        &r,
+        Gate::Reviewer,
+        &"x".repeat(65537),
+        dir.path(),
+        &dir.path().join("packet"),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("64 KiB"));
+}
+#[test]
+fn claude_workers_require_nested_sandbox_probe_without_guessing_policy() {
+    use simon_says::provider::requires_nested_sandbox_probe;
+    let mut claude = role("agent", Some("claude"));
+    assert!(requires_nested_sandbox_probe(&claude, Gate::Worker));
+    claude.args = vec!["--permission-mode".into(), "acceptEdits".into()];
+    assert!(requires_nested_sandbox_probe(&claude, Gate::Worker));
+    assert!(!requires_nested_sandbox_probe(&claude, Gate::Reviewer));
+    assert!(!requires_nested_sandbox_probe(&claude, Gate::Unblocker));
+    assert!(!requires_nested_sandbox_probe(
+        &role("agent", Some("codex")),
+        Gate::Worker
+    ));
+    assert!(!requires_nested_sandbox_probe(
+        &role("command", None),
+        Gate::Worker
+    ));
+}

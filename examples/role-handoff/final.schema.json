@@ -1,0 +1,1 @@
+{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "additionalProperties": false, "required": ["question", "answer", "backlog_disposition", "source"], "properties": {"question": {"type": "string"}, "answer": {"type": "string"}, "backlog_disposition": {"type": "string"}, "source": {"type": "string"}}}

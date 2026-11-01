@@ -12,6 +12,9 @@
 | Unreachable terminal or unsupported cycle | Prelaunch validation failure |
 | Invalid or escaping file path | Prelaunch validation failure |
 | Live template modified after initialization | Running instance still uses frozen snapshot or refuses altered authority; never silently switches |
+| Original run context modified or removed after initialization | All roles and retries receive the same frozen original task; the digest changes if stored context changes |
+| Approval required after review | Stop for explicit approval bound to a unique review ID, accepted commit and frozen digest; no later stage runs first |
+| Approval verification interrupted | Persist uncertain checking state; refuse replay until explicit recovery |
 | Declared JSON Schema violated | Mechanical gate fails; no Reviewer pass/next stage |
 
 ## Execution

@@ -12,6 +12,8 @@ use std::{
 pub struct Workflow {
     pub schema_version: u32,
     pub name: String,
+    /// Reusable workflow purpose, included in every action packet.
+    pub purpose: Option<String>,
     pub start: String,
     pub roles: BTreeMap<String, Role>,
     pub stages: BTreeMap<String, Stage>,
@@ -43,6 +45,9 @@ pub struct Stage {
     pub outputs: Vec<String>,
     pub output_schema: Option<String>,
     pub on_pass: String,
+    /// Stop after review until the accepted checkpoint is explicitly approved.
+    #[serde(default)]
+    pub approval_required: bool,
     pub max_review_cycles: u32,
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,6 +56,8 @@ pub struct Snapshot {
     pub schema_version: u32,
     pub template: String,
     pub files: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_context: Option<String>,
     pub sha256: String,
 }
 
@@ -102,6 +109,12 @@ impl Workflow {
             w.schema_version
         );
         ensure!(identifier(&w.name), "invalid workflow name");
+        if let Some(purpose) = &w.purpose {
+            ensure!(
+                !purpose.trim().is_empty() && purpose.len() <= 16384,
+                "workflow purpose must be nonempty and at most 16384 bytes"
+            );
+        }
         ensure!(
             !w.stages.is_empty() && w.stages.contains_key(&w.start),
             "start stage does not exist"
@@ -295,7 +308,7 @@ fn validate_schema(schema: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-fn digest(template: &str, files: &BTreeMap<String, String>) -> String {
+fn digest(template: &str, files: &BTreeMap<String, String>, run_context: Option<&str>) -> String {
     let mut hash = Sha256::new();
     for (name, content) in
         std::iter::once(("", template)).chain(files.iter().map(|(k, v)| (k.as_str(), v.as_str())))
@@ -304,6 +317,11 @@ fn digest(template: &str, files: &BTreeMap<String, String>) -> String {
         hash.update(name.as_bytes());
         hash.update((content.len() as u64).to_be_bytes());
         hash.update(content.as_bytes());
+    }
+    if let Some(context) = run_context {
+        hash.update(b"\xffsimon-run-context-v1\0");
+        hash.update((context.len() as u64).to_be_bytes());
+        hash.update(context.as_bytes());
     }
     format!("{:x}", hash.finalize())
 }
@@ -323,18 +341,59 @@ impl Snapshot {
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or(Path::new(".")),
         )?;
-        let sha256 = digest(&template, &files);
+        let sha256 = digest(&template, &files, None);
         Ok(Self {
             schema_version: 1,
             template,
             files,
+            run_context: None,
             sha256,
         })
+    }
+    /// Bind run-specific user context into the same frozen authority digest.
+    pub fn with_context(mut self, path: &Path) -> Result<Self> {
+        const MAX_CONTEXT_BYTES: u64 = 32 * 1024;
+        let metadata = fs::symlink_metadata(path)
+            .with_context(|| format!("inspect context {}", path.display()))?;
+        ensure!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "run context must be a regular, non-symlink file"
+        );
+        ensure!(
+            metadata.len() <= MAX_CONTEXT_BYTES,
+            "run context exceeds 32 KiB"
+        );
+        use std::io::Read;
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options
+            .open(path)
+            .with_context(|| format!("open context {}", path.display()))?;
+        ensure!(
+            file.metadata()?.is_file(),
+            "run context must be a regular file"
+        );
+        let mut content = String::new();
+        file.take(MAX_CONTEXT_BYTES + 1)
+            .read_to_string(&mut content)
+            .with_context(|| format!("read UTF-8 context {}", path.display()))?;
+        ensure!(
+            !content.trim().is_empty() && content.len() <= MAX_CONTEXT_BYTES as usize,
+            "run context must be nonempty and at most 32 KiB"
+        );
+        self.run_context = Some(content);
+        self.sha256 = digest(&self.template, &self.files, self.run_context.as_deref());
+        Ok(self)
     }
     pub fn verify(&self) -> Result<()> {
         ensure!(self.schema_version == 1, "unsupported snapshot version");
         ensure!(
-            self.sha256 == digest(&self.template, &self.files),
+            self.sha256 == digest(&self.template, &self.files, self.run_context.as_deref()),
             "snapshot integrity mismatch"
         );
         Ok(())

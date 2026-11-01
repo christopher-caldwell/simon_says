@@ -121,3 +121,71 @@ pub fn prepare(
         })
     }
 }
+
+/// Probe whether the exact outer guard can host a nested macOS sandbox.
+/// This runs only harmless local `true`; it never invokes a provider or model.
+/// A nonzero result or timeout is treated as unsupported, not as permission to
+/// weaken either policy.
+pub fn probe_nested(plan: &SandboxPlan) -> Result<()> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = plan;
+        anyhow::bail!("nested action sandbox probe is only supported on macOS");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::{
+            os::unix::process::CommandExt,
+            process::{Command, Stdio},
+            thread,
+            time::{Duration, Instant},
+        };
+        ensure!(
+            plan.program == "/usr/bin/sandbox-exec"
+                && plan.argv.len() >= 4
+                && plan.argv[0] == "-p"
+                && plan.argv[2] == "--",
+            "invalid outer sandbox plan"
+        );
+        let mut command = Command::new(&plan.program);
+        command
+            .args([
+                "-p",
+                &plan.argv[1],
+                "--",
+                "/usr/bin/sandbox-exec",
+                "-p",
+                "(version 1)(allow default)",
+                "--",
+                "/usr/bin/true",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.process_group(0);
+        let mut child = command
+            .spawn()
+            .context("start nested sandbox capability probe")?;
+        let group = child.id() as libc::pid_t;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = child
+                .try_wait()
+                .context("wait for nested sandbox capability probe")?
+            {
+                ensure!(status.success(), "Claude Worker cannot run: the required native sandbox cannot be nested inside the Simon Says action guard; neither sandbox has been disabled. Use a different Worker adapter or compatible platform; no model was invoked.");
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                unsafe {
+                    libc::kill(-group, libc::SIGKILL);
+                }
+                let _ = child.wait();
+                anyhow::bail!(
+                    "Claude Worker nested sandbox capability probe timed out; no model was invoked"
+                );
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+}

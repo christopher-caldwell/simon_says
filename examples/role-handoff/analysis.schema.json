@@ -1,0 +1,1 @@
+{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "additionalProperties": false, "required": ["question", "answer", "source", "unresolved_issues"], "properties": {"question": {"type": "string"}, "answer": {"type": "string"}, "source": {"type": "string"}, "unresolved_issues": {"type": "array"}}}

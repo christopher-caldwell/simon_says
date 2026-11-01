@@ -18,6 +18,8 @@ pub enum Status {
     Preparing,
     Running,
     Stopped,
+    AwaitingApproval,
+    ApprovalChecking,
     Complete,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +30,25 @@ pub struct Response {
     pub report: String,
     pub candidate_commit: Option<String>,
     pub inspected_commit: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Approval {
+    pub approval_id: String,
+    pub review_action: String,
+    pub stage: String,
+    pub commit: String,
+    pub snapshot_digest: String,
+    pub approved_at_unix: u64,
+    pub note: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingApproval {
+    pub approval_id: String,
+    pub stage: String,
+    pub review_action: String,
+    pub commit: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
@@ -42,6 +63,10 @@ pub struct State {
     pub unblock_origin: Option<Gate>,
     pub unblock_used: bool,
     pub stop_reason: Option<String>,
+    #[serde(default)]
+    pub approvals: Vec<Approval>,
+    #[serde(default)]
+    pub pending_approval: Option<PendingApproval>,
 }
 impl State {
     pub fn new(workflow: &Workflow, baseline: String) -> Self {
@@ -57,6 +82,8 @@ impl State {
             unblock_origin: None,
             unblock_used: false,
             stop_reason: None,
+            approvals: Vec::new(),
+            pending_approval: None,
         }
     }
     pub fn start(&mut self, action_id: String) -> Result<()> {
@@ -117,14 +144,16 @@ impl State {
                 match response.outcome.as_str() {
                     "pass" => {
                         self.accepted_commit = self.candidate_commit.take().unwrap();
-                        if stage.on_pass == "complete" {
-                            self.status = Status::Complete;
+                        if stage.approval_required {
+                            self.pending_approval = Some(PendingApproval {
+                                approval_id: uuid::Uuid::new_v4().to_string(),
+                                stage: self.stage.clone(),
+                                review_action: response.action_id.clone(),
+                                commit: self.accepted_commit.clone(),
+                            });
+                            self.status = Status::AwaitingApproval;
                         } else {
-                            self.stage = stage.on_pass.clone();
-                            self.gate = Gate::Worker;
-                            self.review_cycles = 0;
-                            self.feedback.clear();
-                            self.unblock_used = false;
+                            self.advance(&stage.on_pass);
                         }
                     }
                     "changes_required" => {
@@ -172,6 +201,69 @@ impl State {
             self.status = Status::Ready;
         }
         Ok(())
+    }
+    /// Record an explicit approval of the exact reviewed checkpoint and continue the frozen route.
+    pub fn approve(
+        &mut self,
+        workflow: &Workflow,
+        commit: &str,
+        digest: &str,
+        approval_id: &str,
+        approved_at_unix: u64,
+        note: Option<String>,
+    ) -> Result<()> {
+        ensure!(
+            self.status == Status::ApprovalChecking,
+            "approval is not being checked"
+        );
+        let pending = self
+            .pending_approval
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("pending approval identity missing"))?;
+        ensure!(
+            pending.approval_id == approval_id
+                && pending.stage == self.stage
+                && pending.commit == commit,
+            "approval identity does not match pending review"
+        );
+        ensure!(
+            self.accepted_commit == commit,
+            "approval commit does not match accepted checkpoint"
+        );
+        ensure!(!digest.is_empty(), "approval requires workflow identity");
+        let stage = workflow
+            .stages
+            .get(&self.stage)
+            .ok_or_else(|| anyhow::anyhow!("unknown current stage"))?;
+        ensure!(
+            stage.approval_required,
+            "current stage does not require approval"
+        );
+        let next = stage.on_pass.clone();
+        self.approvals.push(Approval {
+            approval_id: pending.approval_id.clone(),
+            review_action: pending.review_action.clone(),
+            stage: self.stage.clone(),
+            commit: commit.to_owned(),
+            snapshot_digest: digest.to_owned(),
+            approved_at_unix,
+            note,
+        });
+        self.pending_approval = None;
+        self.advance(&next);
+        Ok(())
+    }
+    fn advance(&mut self, next: &str) {
+        if next == "complete" {
+            self.status = Status::Complete;
+        } else {
+            self.stage = next.to_owned();
+            self.gate = Gate::Worker;
+            self.review_cycles = 0;
+            self.feedback.clear();
+            self.unblock_used = false;
+            self.status = Status::Ready;
+        }
     }
     fn block(&mut self) {
         if self.unblock_used {

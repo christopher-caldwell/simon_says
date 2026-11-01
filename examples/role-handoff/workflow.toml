@@ -1,0 +1,82 @@
+schema_version = 1
+name = "role-handoff"
+purpose = "Preserve the question, record collection evidence and issues, analyze, then process the backlog before approval."
+start = "investigate"
+
+[roles.investigator]
+kind = "command"
+argv = ["python3", "role_action.py", "investigator"]
+[roles.supervisor]
+kind = "command"
+argv = ["python3", "role_action.py", "supervisor"]
+[roles.analyzer]
+kind = "command"
+argv = ["python3", "role_action.py", "analyzer"]
+[roles.fixer]
+kind = "command"
+argv = ["python3", "role_action.py", "fixer"]
+[roles.finalizer]
+kind = "command"
+argv = ["python3", "role_action.py", "finalizer"]
+[roles.reviewer]
+kind = "command"
+argv = ["python3", "role_action.py", "reviewer"]
+[roles.unblocker]
+kind = "command"
+argv = ["python3", "role_action.py", "unblocker"]
+
+[stages.investigate]
+worker = "investigator"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "investigate.md"
+inputs = ["question.json"]
+outputs = ["investigation.json"]
+output_schema = "investigation.schema.json"
+on_pass = "supervise"
+max_review_cycles = 2
+
+[stages.supervise]
+worker = "supervisor"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "supervise.md"
+inputs = ["investigation.json", "question.json"]
+outputs = ["collection.json"]
+output_schema = "collection.schema.json"
+on_pass = "analyze"
+max_review_cycles = 2
+
+[stages.analyze]
+worker = "analyzer"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "analyze.md"
+inputs = ["collection.json"]
+outputs = ["analysis.json"]
+output_schema = "analysis.schema.json"
+on_pass = "fix"
+max_review_cycles = 2
+
+[stages.fix]
+worker = "fixer"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "fix.md"
+inputs = ["collection.json", "analysis.json"]
+outputs = ["fixes.json"]
+output_schema = "fixes.schema.json"
+on_pass = "finalize"
+approval_required = true
+max_review_cycles = 2
+
+[stages.finalize]
+worker = "finalizer"
+reviewer = "reviewer"
+unblocker = "unblocker"
+instructions = "finalize.md"
+inputs = ["analysis.json", "fixes.json"]
+outputs = ["final.json"]
+output_schema = "final.schema.json"
+on_pass = "complete"
+max_review_cycles = 2

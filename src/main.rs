@@ -29,11 +29,26 @@ enum Command {
         project: PathBuf,
         #[arg(long)]
         run_dir: PathBuf,
+        /// Freeze this UTF-8 file as the original task context for every role.
+        #[arg(long)]
+        context: Option<PathBuf>,
     },
     /// Show durable state and the last safe checkpoint.
     Status { run_dir: PathBuf },
     /// Continue a ready run. Uncertain preparation or running actions are never replayed.
     Resume { run_dir: PathBuf },
+    /// Approve the exact reviewed checkpoint and continue the frozen route.
+    Approve {
+        run_dir: PathBuf,
+        #[arg(long)]
+        expected_commit: String,
+        #[arg(long)]
+        expected_digest: String,
+        #[arg(long)]
+        expected_approval: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
     /// Recover an interrupted initialization after verifying the recorded checkout.
     RecoverInit {
         run_dir: PathBuf,
@@ -86,8 +101,9 @@ fn main() -> Result<()> {
             template,
             project,
             run_dir,
+            context,
         } => {
-            controller::initialize(&template, &project, &run_dir)?;
+            controller::initialize_with_context(&template, &project, &run_dir, context.as_deref())?;
             print_result(controller::execute(&run_dir)?)?;
         }
         Command::Status { run_dir } => println!(
@@ -95,6 +111,26 @@ fn main() -> Result<()> {
             serde_json::to_string_pretty(&controller::status(&run_dir)?)?
         ),
         Command::Resume { run_dir } => print_result(controller::execute(&run_dir)?)?,
+        Command::Approve {
+            run_dir,
+            expected_commit,
+            expected_digest,
+            expected_approval,
+            note,
+        } => {
+            let record = controller::approve(
+                &run_dir,
+                &expected_commit,
+                &expected_digest,
+                &expected_approval,
+                note,
+            )?;
+            if record.state.status == Status::Ready {
+                print_result(controller::execute(&run_dir)?)?;
+            } else {
+                print_result(record)?;
+            }
+        }
         Command::RecoverInit {
             run_dir,
             acknowledge_external_effects,

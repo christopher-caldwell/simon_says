@@ -88,3 +88,15 @@ fn preparation_is_durable_and_matching_identity_starts_once() {
     assert_eq!(loaded.state.status, Status::Running);
     assert_eq!(loaded.next_action, 1);
 }
+#[cfg(unix)]
+#[test]
+fn dangling_lock_symlink_never_creates_external_target() {
+    let (tmp, _, store) = init();
+    let root = store.root().to_owned();
+    drop(store);
+    fs::remove_file(root.join("lock")).unwrap();
+    let target = tmp.path().join("outside-target");
+    std::os::unix::fs::symlink(&target, root.join("lock")).unwrap();
+    assert!(RunStore::open(&root).is_err());
+    assert!(!target.exists());
+}

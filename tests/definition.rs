@@ -137,3 +137,47 @@ fn rejects_unbounded_action_timeouts() {
         assert!(Workflow::parse_and_validate(&bad, d.path()).is_err());
     }
 }
+#[test]
+fn run_context_is_bounded_utf8_and_digest_bound() {
+    let (d, t) = setup();
+    let template = d.path().join("workflow.toml");
+    fs::write(&template, t).unwrap();
+    let context = d.path().join("context.txt");
+    fs::write(&context, "original task and authority").unwrap();
+    let original = Snapshot::create(&template).unwrap();
+    let frozen = Snapshot::create(&template)
+        .unwrap()
+        .with_context(&context)
+        .unwrap();
+    assert_ne!(original.sha256, frozen.sha256);
+    frozen.verify().unwrap();
+    let encoded = serde_json::to_vec(&original).unwrap();
+    let old: Snapshot = serde_json::from_slice(&encoded).unwrap();
+    old.verify().unwrap();
+    let mut tampered = frozen;
+    tampered.run_context = Some("changed".into());
+    assert!(tampered.verify().is_err());
+    fs::write(&context, vec![b'x'; 32769]).unwrap();
+    assert!(Snapshot::create(&template)
+        .unwrap()
+        .with_context(&context)
+        .is_err());
+    fs::write(&context, [0xff]).unwrap();
+    assert!(Snapshot::create(&template)
+        .unwrap()
+        .with_context(&context)
+        .is_err());
+}
+#[cfg(unix)]
+#[test]
+fn rejects_symlinked_run_context() {
+    let (d, t) = setup();
+    let template = d.path().join("workflow.toml");
+    fs::write(&template, t).unwrap();
+    fs::write(d.path().join("context"), "task").unwrap();
+    std::os::unix::fs::symlink("context", d.path().join("link")).unwrap();
+    assert!(Snapshot::create(&template)
+        .unwrap()
+        .with_context(&d.path().join("link"))
+        .is_err());
+}
