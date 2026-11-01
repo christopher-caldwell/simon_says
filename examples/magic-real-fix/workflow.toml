@@ -1,0 +1,31 @@
+schema_version = 1
+name = "real-engine-isolated-repair"
+purpose = "Repair a specifically requested expression gap in an isolated historical engine snapshot."
+start = "repair"
+frozen_project_files = ["simon-workflow.toml", "simon-repair/profile.md", "simon-repair/issue.md", "simon-repair/fix.md", "simon-repair/schema.json", "simon-repair/review.py", "simon-repair/stop.py"]
+
+[roles.fixer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6.1-terra"
+effort = "high"
+profile = "simon-repair/profile.md"
+timeout_seconds = 1800
+[roles.reviewer]
+kind = "command"
+argv = ["python3", "-B", "simon-repair/review.py"]
+timeout_seconds = 1800
+[roles.stop]
+kind = "command"
+argv = ["python3", "-B", "simon-repair/stop.py"]
+timeout_seconds = 30
+[stages.repair]
+worker = "fixer"
+reviewer = "reviewer"
+unblocker = "stop"
+instructions = "simon-repair/fix.md"
+inputs = ["simon-repair/issue.md"]
+outputs = ["repair.json"]
+output_schema = "simon-repair/schema.json"
+on_pass = "complete"
+max_review_cycles = 2
