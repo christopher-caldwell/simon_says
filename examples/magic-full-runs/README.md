@@ -25,3 +25,16 @@ SIMON_MAGIC_RUNTIME_ROOT=/absolute/isolated/runtime \
   simon-says run /absolute/new-project/workflow.toml --project /absolute/new-project \
   --run-dir /absolute/correction-run --context /absolute/new-project/original-task.txt
 ```
+
+## Recorded live diagnostics
+
+On 2026-11-01 four independent seed namespaces were run against isolated Manabrew runtime identity `d031727b7a21ea20ce38d9ea6b96f1629756813a8f7ad5e66573d4e1fd7e85dc`. The configured Codex roles were Investigator `gpt-6.1-terra/xhigh`, Supervisor `gpt-6-luna/high`, and fresh Analyzer `gpt-6.1-sol/high`. Each run assigned and retained four attempts, used one worker, and launched no replacement games. Native evidence and action records remain in `magic-full-run-{a,b,c,d}` beside the Simon Says checkout. The input counts below already include cached input; no monetary costs were recorded. Role-scope and scheduling limitations above apply to all four runs.
+
+| Run | Outcome | Eligible / excluded | Eligible warning counts | Provider input / cached / output tokens |
+| --- | --- | --- | --- | --- |
+| A | Stopped at review limit after one correction attempt | 3 / 1 | 16 engine-warning, 16 card-play-failed | 995,210 / 876,288 / 8,054 |
+| B | Awaiting approval; accepted `e6230dab40ca6851a750ba708f0b77fa72c42c36` | 3 / 1 | 5 engine-warning | 593,899 / 506,880 / 3,638 |
+| C | Awaiting approval; accepted `97b007323fd2ae566d7b4ac22d4ba556bf26865c` | 3 / 1 | 1 engine-warning, 1 card-play-failed | 600,298 / 528,384 / 4,519 |
+| D | Awaiting approval; accepted `cbd17c34a7ee785193054bfb22e58c5f4ed6e94a` | 4 / 0 | 4 engine-warning | 732,021 / 663,680 / 5,513 |
+
+Warning categories and exclusion reasons can overlap; counts do not establish distinct affected games. A's Reviewer correctly refused two mismatching outputs: the Analyzer used retained attempts rather than eligible games for `verified_games` and added context to a then-exact issue array. The correction feedback was too vague, so the second candidate retained the mismatch and the controller safely stopped. B had explicit field guidance. C and D also allowed supplemental issue objects while preserving each source issue exactly; C exercised this successfully by adding a distinct finding. A's baseline predates those fixture improvements. B/C/D are three observed independent successful handoffs through the intentional approval gate, not proof of reliability for all workflows or a completed production study.
