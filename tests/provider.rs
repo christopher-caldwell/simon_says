@@ -14,6 +14,7 @@ fn role(kind: &str, adapter: Option<&str>) -> Role {
         resume_worker_session: false,
         timeout_seconds: None,
         args: vec![],
+        scratch_env: Default::default(),
     }
 }
 #[test]

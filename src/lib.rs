@@ -43,6 +43,9 @@ pub struct Role {
     pub timeout_seconds: Option<u64>,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Environment variables whose values are confined action-owned scratch subdirectories.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scratch_env: BTreeMap<String, String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -93,6 +96,90 @@ pub(crate) fn validate_relative_path(s: &str) -> Result<()> {
     );
     Ok(())
 }
+/// Validate workflow-authored bindings without interpreting them through a shell.
+pub(crate) fn validate_scratch_env(bindings: &BTreeMap<String, String>) -> Result<()> {
+    ensure!(
+        bindings.len() <= 32,
+        "scratch_env supports at most 32 variables"
+    );
+    for (name, path) in bindings {
+        validate_scratch_env_name(name)?;
+        ensure!(
+            path.len() <= 1024
+                && !path.is_empty()
+                && !path.contains('\\')
+                && path.split('/').all(|part| !part.is_empty()
+                    && part != "."
+                    && part != ".."
+                    && !part.eq_ignore_ascii_case(".git")
+                    && !part.chars().any(char::is_control)),
+            "scratch_env path must be a confined relative directory: {path:?}"
+        );
+        validate_relative_path(path)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_scratch_env_name(name: &str) -> Result<()> {
+    let mut bytes = name.bytes();
+    ensure!(
+        name.len() <= 128
+            && bytes
+                .next()
+                .is_some_and(|c| c == b'_' || c.is_ascii_uppercase())
+            && bytes.all(|c| c == b'_' || c.is_ascii_uppercase() || c.is_ascii_digit()),
+        "invalid scratch_env variable name {name:?}; use uppercase ASCII environment names"
+    );
+    let reserved_prefix = [
+        "SIMON_",
+        "GIT_",
+        "DYLD_",
+        "LD_",
+        "BASH_",
+        "CODEX_",
+        "CLAUDE_",
+        "ANTHROPIC_",
+        "OPENAI_",
+    ];
+    let reserved_names = [
+        "PATH",
+        "HOME",
+        "SHELL",
+        "ENV",
+        "IFS",
+        "CDPATH",
+        "PWD",
+        "OLDPWD",
+        "SHLVL",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "RUBYOPT",
+        "PERL5OPT",
+        "PERL5LIB",
+        "JAVA_TOOL_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "_JAVA_OPTIONS",
+        "RUSTC",
+        "RUSTDOC",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTFLAGS",
+        "RUSTDOCFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+    ];
+    ensure!(
+        !reserved_names.contains(&name)
+            && !reserved_prefix
+                .iter()
+                .any(|prefix| name.starts_with(prefix)),
+        "scratch_env variable {name:?} is reserved"
+    );
+    Ok(())
+}
+
 fn read_confined(root: &Path, name: &str) -> Result<String> {
     validate_relative_path(name)?;
     let root = root
@@ -157,6 +244,7 @@ impl Workflow {
         let mut refs = BTreeSet::new();
         for (name, role) in &w.roles {
             ensure!(identifier(name), "invalid role name {name:?}");
+            validate_scratch_env(&role.scratch_env).with_context(|| format!("role {name}"))?;
             if let Some(seconds) = role.timeout_seconds {
                 ensure!(
                     (1..=86400).contains(&seconds),

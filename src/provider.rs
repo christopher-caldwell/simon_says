@@ -8,6 +8,7 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -36,6 +37,9 @@ pub struct InvocationPlan {
     pub timeout_seconds: u64,
     #[serde(default)]
     pub scratch: Option<PathBuf>,
+    /// Exact workflow-authored environment paths, resolved under this action's scratch.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, PathBuf>,
 }
 
 fn default_timeout() -> u64 {
@@ -136,6 +140,7 @@ pub fn prepare_with_session(
     packet_path: &Path,
     session_in: Option<&str>,
 ) -> Result<InvocationPlan> {
+    crate::validate_scratch_env(&role.scratch_env)?;
     if role.resume_worker_session {
         ensure!(
             role.kind == "agent" && role.adapter.as_deref() == Some("codex"),
@@ -284,7 +289,90 @@ pub fn prepare_with_session(
         session_in: session_in.map(str::to_owned),
         timeout_seconds: role.timeout_seconds.unwrap_or_else(default_timeout),
         scratch: None,
+        env: BTreeMap::new(),
     })
+}
+
+/// Resolve author-declared paths under an already reserved action scratch directory.
+/// Existing components are accepted only if they are real directories, never symlinks.
+pub fn scratch_environment(role: &Role, scratch: &Path) -> Result<BTreeMap<String, PathBuf>> {
+    crate::validate_scratch_env(&role.scratch_env)?;
+    let meta = fs::symlink_metadata(scratch).context("inspect action scratch")?;
+    ensure!(
+        meta.is_dir() && !meta.file_type().is_symlink(),
+        "unsafe action scratch"
+    );
+    let root = scratch
+        .canonicalize()
+        .context("canonicalize action scratch")?;
+    let mut out = BTreeMap::new();
+    for (name, relative) in &role.scratch_env {
+        let mut current = root.clone();
+        for part in Path::new(relative).components() {
+            current.push(part.as_os_str());
+            match fs::create_dir(&current) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error).context("create action scratch subdirectory"),
+            }
+            let metadata =
+                fs::symlink_metadata(&current).context("inspect action scratch subdirectory")?;
+            ensure!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "scratch_env path is not a real directory"
+            );
+        }
+        ensure!(
+            current.canonicalize()?.starts_with(&root),
+            "scratch_env escaped action scratch"
+        );
+        out.insert(name.clone(), current);
+    }
+    Ok(out)
+}
+
+fn validate_invocation_env(plan: &InvocationPlan) -> Result<()> {
+    if plan.env.is_empty() {
+        return Ok(());
+    }
+    let scratch = plan
+        .scratch
+        .as_ref()
+        .context("scratch_env requires action scratch")?;
+    let meta = fs::symlink_metadata(scratch).context("inspect invocation scratch")?;
+    ensure!(
+        meta.is_dir() && !meta.file_type().is_symlink(),
+        "unsafe invocation scratch"
+    );
+    let root = scratch.canonicalize()?;
+    let mut relative = BTreeMap::new();
+    for (name, target) in &plan.env {
+        let suffix = target
+            .strip_prefix(&root)
+            .context("scratch_env target is outside action scratch")?;
+        relative.insert(
+            name.clone(),
+            suffix
+                .to_str()
+                .context("scratch_env target is not UTF-8")?
+                .to_owned(),
+        );
+        let mut current = root.clone();
+        for part in suffix.components() {
+            current.push(part.as_os_str());
+            let metadata = fs::symlink_metadata(&current)
+                .context("inspect invocation scratch subdirectory")?;
+            ensure!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "scratch_env target is not a real directory"
+            );
+        }
+        ensure!(
+            target.canonicalize()?.starts_with(&root),
+            "scratch_env target escapes action scratch"
+        );
+    }
+    crate::validate_scratch_env(&relative)
 }
 
 const CLAUDE_WORKER_SANDBOX_SETTINGS: &str = r#"{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"failIfUnavailable":true}}"#;
@@ -309,6 +397,7 @@ fn has_claude_permission_policy(args: &[String]) -> bool {
 /// path. Transport logs are exclusively created to prevent accidental reuse.
 /// A crash or error is uncertain; this function does not retry or clean up.
 pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutcome> {
+    validate_invocation_env(plan)?;
     let stdout_path = action_dir.join("stdout.txt");
     let stderr_path = action_dir.join("stderr.txt");
     let open = |path: &Path| {
@@ -358,6 +447,7 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
     if let Some(scratch) = &plan.scratch {
         command.env("SIMON_SCRATCH", scratch);
     }
+    command.envs(&plan.env);
     // Prevent inherited Git redirection from moving an action outside its checkout.
     for key in [
         "GIT_DIR",

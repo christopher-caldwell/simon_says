@@ -4,6 +4,15 @@ Use `examples/data-report/workflow.toml` as an executable starting point. An opt
 
 Each role may set `timeout_seconds` from 1 to 86400 (default 1800); on timeout the controller attempts to stop its process group and leaves an uncertain action requiring explicit recovery. A stuck or escaped process can remain: verify processes have exited before recovery. A `command` role provides an argv array and runs directly, without a shell. `agent` roles support `codex` and `claude`, an optional model, effort and native args, and a required frozen profile. Model and native permission options are trusted local configuration. Run `simon-says validate <template>` before running. The controller checks inputs and outputs are regular files tracked at the recorded commit. A stage may name one JSON output schema when it has exactly one output. Schema validation uses draft-07; absent `$schema` means draft-07. References and selected newer-draft keywords are rejected. The conservative keyword check also rejects those words as property names. Unknown schema extensions may be ignored by the validator; use draft-07 assertions and test the contract. Arbitrary semantic claims belong in review instructions or a deterministic reviewer.
 
+A role can bind a tool cache or other writable directory to its own action scratch without relying on an inherited environment value:
+
+```toml
+[roles.fixer.scratch_env]
+CARGO_TARGET_DIR = "compiler/target"
+```
+
+Every variable name must use uppercase ASCII letters, digits and underscores, beginning with a letter or underscore. Controller-owned, loader, shell and provider-sensitive environment variables are reserved. Each value must be a nonempty confined relative directory path without `.`, `..`, empty components, `.git`, control characters or symlinks. The controller creates the directories under each action's unique scratch area, passes the resolved paths to the subprocess, and records the exact mapping in the action packet and invocation before launch. A correction or later stage gets a different scratch directory; these bindings are not a persistent shared cache. The environment remains local trusted configuration, and subprocesses can still cause external side effects.
+
 Native agent streams must be valid JSON events and include their successful terminal event (`turn.completed` after the last completed agent message for Codex; `result` with `subtype=success` and `is_error=false` for Claude). Malformed events, later work, an explicit failed turn or a missing terminal event leave the action uncertain even if the process exits zero. This fail-closed contract depends on the native CLI's event format; incompatible CLI versions require adapter verification.
 
 For Codex, started items must have distinct nonempty IDs of at most 512 bytes and must complete in the same turn. At most 4,096 items may be outstanding at once; an update must refer to an outstanding item. A stream that exceeds these bounds stops as uncertain.
