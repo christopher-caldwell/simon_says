@@ -382,6 +382,10 @@ impl InitializationIntent {
             !run_root.starts_with(&source),
             "run directory must be outside source checkout"
         );
+        ensure!(
+            !run_root.starts_with(&common_dir),
+            "run directory must be outside Git's common directory"
+        );
         Ok(Self {
             kind: "initialization".into(),
             phase: InitializationPhase::Reserved,
@@ -446,6 +450,10 @@ impl InitializationIntent {
         ensure!(
             !root.starts_with(&self.source),
             "run directory must be outside source checkout"
+        );
+        ensure!(
+            !root.starts_with(&self.common_dir),
+            "run directory must be outside Git's common directory"
         );
         Ok(root.join("worktree"))
     }
@@ -641,6 +649,10 @@ impl Worktree {
             source_common == work_common
                 && self.git_dir.starts_with(source_common.join("worktrees")),
             "worktree belongs to a different repository"
+        );
+        ensure!(
+            !run_dir.starts_with(&source_common),
+            "run directory must be outside Git's common directory"
         );
         let registered = git(&source, &["worktree", "list", "--porcelain", "-z"])?;
         let record = format!("worktree {}", path_arg(&path)?);

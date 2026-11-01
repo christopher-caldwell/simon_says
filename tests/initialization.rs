@@ -170,3 +170,35 @@ fn resumed_cli_requires_explicit_ack_for_uncertain_initialization() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn initialization_rejects_run_inside_external_git_directory_before_creation() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    let common = root.path().join("external.git");
+    fs::create_dir(&repo).unwrap();
+    for entry in fs::read_dir("examples/data-report").unwrap() {
+        let entry = entry.unwrap();
+        if entry.path().is_file() {
+            fs::copy(entry.path(), repo.join(entry.file_name())).unwrap();
+        }
+    }
+    git(
+        &repo,
+        &["init", "--separate-git-dir", common.to_str().unwrap(), "-q"],
+    );
+    git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["config", "user.email", "test@example.invalid"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "baseline"]);
+    let run = common.join("candidate-run");
+    let error = controller::initialize(&repo.join("workflow.toml"), &repo, &run).unwrap_err();
+    assert!(format!("{error:#}").contains("Git's common directory"));
+    assert!(
+        !run.exists(),
+        "preflight must not create the run inside Git metadata"
+    );
+    assert!(common.join("objects").is_dir());
+    assert!(repo.join("workflow.toml").is_file());
+}

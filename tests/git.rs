@@ -215,3 +215,27 @@ fn managed_worktree_rejects_ignored_files_but_source_ignored_files_are_preserved
         "user-owned ignored data"
     );
 }
+
+#[test]
+fn worktree_is_not_created_inside_separate_git_common_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let common = temp.path().join("external.git");
+    fs::create_dir(&repo).unwrap();
+    command(
+        &repo,
+        &["init", "--separate-git-dir", common.to_str().unwrap(), "-q"],
+    );
+    command(&repo, &["config", "user.email", "test@example.invalid"]);
+    command(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("data"), "baseline").unwrap();
+    command(&repo, &["add", "data"]);
+    command(&repo, &["commit", "-qm", "baseline"]);
+    let run = common.join("unexpected-run");
+    assert!(
+        simon_says::git::InitializationIntent::capture(&repo, &run).is_err(),
+        "run directory must not be placed inside Git's common directory"
+    );
+    assert!(!run.exists());
+    assert_eq!(fs::read_to_string(repo.join("data")).unwrap(), "baseline");
+}

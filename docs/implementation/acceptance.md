@@ -11,6 +11,7 @@
 | Missing instruction/schema/profile | Prelaunch validation failure |
 | Unreachable terminal or unsupported cycle | Prelaunch validation failure |
 | Invalid or escaping file path | Prelaunch validation failure |
+| Run directory inside source Git common directory | Reject before creating the run, even when the Git directory is separate from the source checkout |
 | Live template modified after initialization | Running instance still uses frozen snapshot or refuses altered authority; never silently switches |
 | Original run context modified or removed after initialization | All roles and retries receive the same frozen original task; the digest changes if stored context changes |
 | Approval required after review | Stop for explicit approval bound to a unique review ID, accepted commit and frozen digest; no later stage runs first |
