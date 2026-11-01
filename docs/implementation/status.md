@@ -4,10 +4,10 @@ This is a working early runtime, **not an accepted v0 release**. See the README 
 
 ## Implemented
 
-- Strict versioned TOML loading, named acyclic pass routes, reference and path checks, frozen instructions/profiles/schemas and explicitly declared project authority files, and draft-07 JSON Schema compilation and artifact validation.
+- Strict versioned TOML loading, named pass routes and optional bounded reviewer-selected routes, reference and path checks, frozen instructions/profiles/schemas and explicitly declared project authority files, and draft-07 JSON Schema compilation and artifact validation.
 - A locked durable JSON run record and per-action packet, exact invocation, transport logs, result/failure; `preparing` is persisted before action-specific Git checks and checkout, and `running` before action invocation. Interrupted or failed actions require explicit reset rather than automatic replay.
 - Detached worker and review worktrees, full Git object identity and ancestry checks, tracked regular-file artifact checks, separate candidate and accepted commits, and a narrowly verified reset that refuses untracked or ignored files.
-- Command, Codex and Claude invocation plans, action envelopes, Worker/Reviewer correction loops, bounded Unblocker routing, frozen original task context, optional checkpoint-bound approval gates, and automatic continuation through stages.
+- Command, Codex and Claude invocation plans, action envelopes, Worker/Reviewer correction loops, bounded Unblocker routing, configurable role profiles, durable transition limits and reviewed route selection, frozen original task context, optional checkpoint-bound approval gates, and automatic continuation through stages.
 - Two executable examples with the same engine and subprocess/Git tests, including corrections, Worker and Reviewer blocks, invalid schema and identity, process failure, and fresh-process interruption.
 
 ## Limitations and remaining acceptance work

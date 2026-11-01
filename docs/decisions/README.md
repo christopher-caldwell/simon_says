@@ -12,3 +12,5 @@ Decision records preserve the product direction and assumptions without making p
 For unresolved design details see [open questions](../implementation/open-questions.md). Do not amend a past decision retroactively to make later implementation appear authorized.
 
 - [ADR-0005: Separate runtime repository](0005-separate-runtime-repository.md) — implementation decision adapting the sibling-crate proposal to separate repository ownership.
+
+- [ADR-0006: Workflow-defined role routing](0006-workflow-defined-role-routing.md) — user direction for authored roles and dynamic dispatch; bounded reviewer-selected routes are the initial implementation.

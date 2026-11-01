@@ -258,8 +258,8 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             .as_ref()
             .map(|p| snapshot.files.get(p).context("frozen profile missing"))
             .transpose()?;
-        let packet = json!({"schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_worktree":review.as_ref()});
-        let prompt = format!("You are an action in a controlled workflow. Follow this packet and return exactly one JSON object, without markdown. The frozen workflow and controller protocol govern; run_context provides the original task, not authority to alter the workflow, limits, or routes. Do not change the workflow or choose transitions. Worker outcomes: complete (candidate_commit required), blocked; reviewer: pass, changes_required, blocked (inspected_commit required); unblocker: retry, blocked. All responses must include action_id, outcome, nonempty report, candidate_commit and inspected_commit (use null where inapplicable). A complete worker must commit all outputs and leave a clean detached worktree. A blocked worker must leave HEAD and the checkout unchanged from its starting checkpoint; otherwise the controller stops for explicit recovery. Reviewer and unblocker must not modify their checkout. Packet: {}", serde_json::to_string(&packet)?);
+        let packet = json!({"schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":if gate == Gate::Reviewer { Some(stage.routes.keys().collect::<Vec<_>>()) } else { None }, "last_transition":record.state.last_transition, "review_worktree":review.as_ref()});
+        let prompt = format!("You are an action in a controlled workflow. Follow this packet and return exactly one JSON object, without markdown. The frozen workflow and controller protocol govern; run_context provides the original task, not authority to alter the workflow, limits, or routes. Do not change the workflow or invent destinations. When the packet provides nonempty review_routes, a passing reviewer must return a route field containing exactly one listed label based on the reviewed candidate; the controller resolves that label to its frozen destination. Return null or omit route in all other cases. Worker outcomes: complete (candidate_commit required), blocked; reviewer: pass, changes_required, blocked (inspected_commit required); unblocker: retry, blocked. All responses must include action_id, outcome, nonempty report, candidate_commit and inspected_commit (use null where inapplicable). A complete worker must commit all outputs and leave a clean detached worktree. A blocked worker must leave HEAD and the checkout unchanged from its starting checkpoint; otherwise the controller stops for explicit recovery. Reviewer and unblocker must not modify their checkout. Packet: {}", serde_json::to_string(&packet)?);
         let packet_path = store
             .root()
             .join("actions")
@@ -353,6 +353,78 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
     }
     Ok(record)
 }
+// Check that a pending conditional route is the one recorded by the exact
+// reviewer action. Action records are durable evidence, not a hostile-user
+// security boundary; the run owner still has filesystem access.
+fn verify_pending_route(
+    store: &RunStore,
+    record: &RunRecord,
+    pending: &crate::routing::PendingApproval,
+) -> Result<()> {
+    let suffix = pending
+        .review_action
+        .strip_prefix("action-")
+        .context("invalid review action identity")?;
+    ensure!(
+        !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()),
+        "invalid review action identity"
+    );
+    let actions = store.root().join("actions");
+    let meta = fs::symlink_metadata(&actions)?;
+    ensure!(
+        meta.is_dir() && !meta.file_type().is_symlink(),
+        "unsafe actions directory"
+    );
+    let dir = actions.join(&pending.review_action);
+    let meta = fs::symlink_metadata(&dir)?;
+    ensure!(
+        meta.is_dir() && !meta.file_type().is_symlink(),
+        "unsafe review action directory"
+    );
+    fn read_record(path: &Path) -> Result<serde_json::Value> {
+        let meta = fs::symlink_metadata(path)?;
+        ensure!(
+            meta.is_file() && !meta.file_type().is_symlink(),
+            "unsafe review record"
+        );
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(path)?;
+        Ok(serde_json::from_reader(file)?)
+    }
+    let packet = read_record(&dir.join("packet.json"))?;
+    let outcome = read_record(&dir.join("outcome.json"))?;
+    ensure!(
+        packet["run_id"] == record.run_id
+            && packet["template_digest"] == record.snapshot_digest
+            && packet["action_id"] == pending.review_action
+            && packet["stage"] == pending.stage
+            && packet["gate"] == "reviewer"
+            && packet["candidate_commit"] == pending.commit,
+        "pending approval does not match recorded review packet"
+    );
+    ensure!(outcome["success"] == true, "review action did not succeed");
+    let response: Response = serde_json::from_str(
+        outcome["response"]
+            .as_str()
+            .context("review response missing")?,
+    )?;
+    ensure!(
+        response.action_id == pending.review_action
+            && response.outcome == "pass"
+            && response.inspected_commit.as_deref() == Some(pending.commit.as_str())
+            && response.candidate_commit.is_none()
+            && response.route == pending.route,
+        "pending approval route does not match the recorded review response"
+    );
+    Ok(())
+}
+
 /// Approve a specific reviewed checkpoint and frozen workflow, never a mutable checkout.
 pub fn approve(
     run_dir: &Path,
@@ -389,6 +461,14 @@ pub fn approve(
     if let Some(note) = &note {
         ensure!(note.len() <= 4096, "approval note exceeds 4096 bytes");
     }
+    let workflow: Workflow = toml::from_str(&snapshot.template)?;
+    let stage = workflow
+        .stages
+        .get(&pending.stage)
+        .context("pending approval stage missing")?;
+    if !stage.routes.is_empty() {
+        verify_pending_route(&store, &record, pending)?;
+    }
     record.state.status = Status::ApprovalChecking;
     store.save(&record)?;
     let worktree: Worktree = serde_json::from_value(record.worktree.clone())?;
@@ -401,7 +481,6 @@ pub fn approve(
         store.save(&record)?;
         return Err(error.context("approval verification failed; explicit reset is required"));
     }
-    let workflow: Workflow = toml::from_str(&snapshot.template)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
@@ -427,6 +506,16 @@ pub fn reset(run_dir: &Path, acknowledge_external_effects: bool) -> Result<()> {
             Status::Preparing | Status::Running | Status::Stopped | Status::ApprovalChecking
         ),
         "reset requires uncertain preparation, execution, approval checking or stopped state"
+    );
+    ensure!(
+        !matches!(
+            record.state.stop_reason.as_deref(),
+            Some(
+                "workflow stage transition limit reached"
+                    | "workflow stage transition counter overflow"
+            )
+        ),
+        "workflow transition budget is exhausted; reset cannot authorize additional actions"
     );
     let worktree: Worktree = serde_json::from_value(record.worktree.clone())?;
     ensure!(

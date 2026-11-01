@@ -1,10 +1,34 @@
 # Authoring a workflow
 
-Use `examples/data-report/workflow.toml` as an executable starting point. An optional top-level `purpose` describes the reusable workflow and is included in every action packet. The workflow and its instruction, profile and schema paths are relative to the template directory. Inputs and outputs are paths relative to the project Git root. Names use ASCII letters, digits, `_` and `-`. All stages must be reachable from `start`, with one acyclic `on_pass` route ending at `complete`. Define a Worker, Reviewer and Unblocker role for each stage and set `max_review_cycles` from 1 to 100.
+Use `examples/data-report/workflow.toml` as an executable starting point. An optional top-level `purpose` describes the reusable workflow and is included in every action packet. The workflow and its instruction, profile and schema paths are relative to the template directory. Inputs and outputs are paths relative to the project Git root. Names use ASCII letters, digits, `_` and `-`. All stages must be reachable from `start`, with at least one route to `complete`. Define named roles with their profiles and assign a Worker, Reviewer and Unblocker to each stage. Set `max_review_cycles` from 1 to 100. A simple workflow uses acyclic `on_pass` destinations; a workflow with named routes or cycles must also set `max_stage_transitions` from 1 to 1000.
 
 Each role may set `timeout_seconds` from 1 to 86400 (default 1800); a timeout stops its process group and leaves an uncertain action requiring explicit recovery. A `command` role provides an argv array and runs directly, without a shell. `agent` roles support `codex` and `claude`, an optional model, effort and native args, and a required frozen profile. Model and native permission options are trusted local configuration. Run `simon-says validate <template>` before running. The controller checks inputs and outputs are regular files tracked at the recorded commit. A stage may name one JSON output schema when it has exactly one output. Schema validation uses draft-07; absent `$schema` means draft-07. References and selected newer-draft keywords are rejected. The conservative keyword check also rejects those words as property names. Unknown schema extensions may be ignored by the validator; use draft-07 assertions and test the contract. Arbitrary semantic claims belong in review instructions or a deterministic reviewer.
 
-On the supported macOS platform, the direct-write guard blocks actions from writing run authority. Some setuid tools such as macOS `/bin/ps` cannot execute under the guard. Each command receives a writable private action scratch directory in `SIMON_SCRATCH` and the absolute JSON packet path in `SIMON_PACKET` and writes one JSON response to stdout. The packet includes action ID, stage, gate, frozen instructions/profile/schema, input and output paths, feedback, originating blocked gate, and checkpoint identities. Each response supplies `action_id`, `outcome`, nonempty `report`, and optional `candidate_commit` and `inspected_commit` fields. Valid outcomes:
+A reviewed stage can choose a workflow-defined route. For example, to dispatch a repair role only when an independently reviewed report finds an issue, and then rerun the original stage, use:
+
+```toml
+max_stage_transitions = 4
+
+[stages.simulate]
+# Define worker, reviewer, unblocker, instructions, inputs and outputs here.
+on_pass = "complete"
+max_review_cycles = 2
+
+[stages.simulate.routes]
+issues = "repair"
+clean = "complete"
+
+[stages.repair]
+# Assign the authored repair profile as worker, with its own reviewer and outputs.
+on_pass = "simulate"
+max_review_cycles = 2
+```
+
+For a stage with `routes`, `on_pass` remains required and must match a declared destination. A passing Reviewer supplies a `route` label from that stage's declared map. The controller binds the decision to the inspected candidate, resolves the destination itself, and rejects missing, unknown or unauthorized labels. Workers, Unblockers and non-passing Reviewers cannot select routes. `max_stage_transitions` counts accepted stage transitions including completion; the controller stops before starting a stage if there is no remaining transition budget to complete. Reset cannot extend this limit. Review corrections and Unblocker retries have their existing separate bounds.
+
+Pass an issue report as a tracked, schema-validated output of the observation stage and declare it as an input to the repair stage. The repair action's `last_transition` packet field identifies the prior reviewed commit, action, stage and selected route; stage feedback is not carried into unrelated stages. Authors must define the issue contract and review criteria; the controller does not interpret domain errors. A workflow uses one isolated Git project: changes to separate source repositories or external side effects require explicit workflow-owned integration and remain subject to the trust boundary. See `examples/dynamic-repair` for the executable controller test; its simulator and repair are deterministic fixtures, not the Magic engine.
+
+On the supported macOS platform, the direct-write guard blocks actions from writing run authority. Some setuid tools such as macOS `/bin/ps` cannot execute under the guard. Each command receives a writable private action scratch directory in `SIMON_SCRATCH` and the absolute JSON packet path in `SIMON_PACKET` and writes one JSON response to stdout. The packet includes action ID, stage, gate, frozen instructions/profile/schema, input and output paths, feedback, originating blocked gate, and checkpoint identities, declared reviewer route labels, and the preceding transition when present. Each response supplies `action_id`, `outcome`, nonempty `report`, optional `candidate_commit` and `inspected_commit` fields, and a `route` label when required by a routed reviewer pass. Valid outcomes:
 
 | Gate | Outcomes | Required commit |
 | --- | --- | --- |
