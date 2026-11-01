@@ -229,7 +229,6 @@ pub fn probe_nested(plan: &SandboxPlan) -> Result<()> {
         let mut child = command
             .spawn()
             .context("start nested sandbox capability probe")?;
-        let group = child.id() as libc::pid_t;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Some(status) = child
@@ -240,12 +239,9 @@ pub fn probe_nested(plan: &SandboxPlan) -> Result<()> {
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                unsafe {
-                    libc::kill(-group, libc::SIGKILL);
-                }
-                let _ = child.wait();
+                let reaped = crate::git_process::terminate_unreaped(&mut child);
                 anyhow::bail!(
-                    "Claude Worker nested sandbox capability probe timed out; no model was invoked"
+                    "Claude Worker nested sandbox capability probe timed out; termination attempted (leader reaped: {reaped}); verify processes exited before retrying; no model was invoked"
                 );
             }
             thread::sleep(Duration::from_millis(25));

@@ -154,6 +154,11 @@ fn timeout_stops_action_without_claiming_success() {
     let started = std::time::Instant::now();
     let error = invoke(&plan, dir.path()).unwrap_err();
     assert!(error.to_string().contains("timed out"));
+    assert!(error.to_string().contains("termination attempted"));
+    assert!(error.to_string().contains("leader reaped: true"));
+    assert!(error
+        .to_string()
+        .contains("external effects remain uncertain"));
     assert!(started.elapsed() < std::time::Duration::from_secs(8));
     assert!(dir.path().join("process.json").exists());
 }

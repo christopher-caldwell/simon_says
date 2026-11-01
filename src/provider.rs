@@ -46,19 +46,6 @@ fn default_timeout() -> u64 {
 // runaway action cannot make the controller allocate an unbounded response.
 const MAX_ACTION_LOG_BYTES: u64 = 64 * 1024 * 1024;
 
-fn terminate_owned(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        // Only call while the child is unreaped: its PID cannot yet be reused.
-        if unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) } != 0 {
-            let _ = child.kill();
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 fn check_log_sizes(stdout: &Path, stderr: &Path) -> Result<()> {
     for path in [stdout, stderr] {
         ensure!(
@@ -414,33 +401,37 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
         Ok(())
     })();
     if let Err(error) = receipt_result {
-        terminate_owned(&mut child);
-        return Err(error.context("record action process; action is uncertain"));
+        let reaped = crate::git_process::terminate_unreaped(&mut child);
+        return Err(error.context(format!("record action process; termination attempted (leader reaped: {reaped}); action and external effects remain uncertain")));
     }
     #[cfg(unix)]
     let group = child.id() as libc::pid_t;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(plan.timeout_seconds);
     let status = loop {
         if let Err(error) = check_log_sizes(&stdout_path, &stderr_path) {
-            terminate_owned(&mut child);
-            return Err(error);
+            let reaped = crate::git_process::terminate_unreaped(&mut child);
+            let message = format!("{error}; process-group termination attempted (leader reaped: {reaped}); processes and external effects remain uncertain");
+            return Err(error.context(message));
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(error) => {
-                terminate_owned(&mut child);
-                return Err(error)
-                    .with_context(|| format!("wait for {}; action is uncertain", plan.program));
+                return Err(error).with_context(|| {
+                    format!(
+                        "wait for {}; processes and external effects remain uncertain",
+                        plan.program
+                    )
+                });
             }
         }
         if std::time::Instant::now() >= deadline {
             // The direct child is still alive and unreaped, so its PID cannot be reused.
             // Stop the action's own process group, then retain Running/uncertain state.
-            terminate_owned(&mut child);
+            let reaped = crate::git_process::terminate_unreaped(&mut child);
             let _ = fs::File::open(&stdout_path).and_then(|f| f.sync_all());
             let _ = fs::File::open(&stderr_path).and_then(|f| f.sync_all());
-            bail!("action timed out after {} seconds; process group was terminated, but external effects and escaped descendants remain uncertain", plan.timeout_seconds);
+            bail!("action timed out after {} seconds; process-group termination attempted (leader reaped: {reaped}); processes and external effects remain uncertain", plan.timeout_seconds);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     };

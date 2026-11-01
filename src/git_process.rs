@@ -13,6 +13,25 @@ const GIT_DEADLINE: Duration = Duration::from_secs(60);
 const DESCENDANT_GRACE: Duration = Duration::from_secs(2);
 const MAX_STREAM_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Attempt to stop an unreaped child and its process group, without allowing an
+/// uninterruptible child to turn a deadline into an unbounded wait.
+pub(crate) fn terminate_unreaped(child: &mut std::process::Child) -> bool {
+    #[cfg(unix)]
+    if unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) } != 0 {
+        let _ = child.kill();
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => return false,
+        }
+    }
+}
+
 /// Run a single Git command with bounded time and output. Input is written to a
 /// seekable anonymous file before spawn, avoiding blocked pipe-writer threads;
 /// both output streams are file-backed, so neither can deadlock the other.
@@ -76,28 +95,6 @@ fn run_bounded(
     let mut child = command.spawn().context("start Git process")?;
     #[cfg(unix)]
     let group = child.id() as libc::pid_t;
-    let stop = |child: &mut std::process::Child| {
-        // Only signal the group before this child has been reaped: its PID
-        // cannot yet have been reused by an unrelated process.
-        #[cfg(unix)]
-        if unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) } != 0 {
-            let _ = child.kill();
-        }
-        #[cfg(not(unix))]
-        let _ = child.kill();
-        let reap_deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => return true,
-                Ok(None) if Instant::now() < reap_deadline => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                // A leader stuck in the kernel or consumed by an external
-                // reaper must not turn the timeout into another unbounded wait.
-                _ => return false,
-            }
-        }
-    };
     let end = Instant::now() + deadline;
     let status = loop {
         let size = match stdout
@@ -106,14 +103,14 @@ fn run_bounded(
         {
             Ok(size) => size,
             Err(error) => {
-                let reaped = stop(&mut child);
+                let reaped = terminate_unreaped(&mut child);
                 return Err(error).with_context(|| format!(
                     "inspect Git output; termination attempted (leader reaped: {reaped}); processes and external effects remain uncertain"
                 ));
             }
         };
         if size > output_limit {
-            let reaped = stop(&mut child);
+            let reaped = terminate_unreaped(&mut child);
             bail!("Git output exceeded {output_limit} bytes; process-group termination attempted (leader reaped: {reaped}); processes and external effects remain uncertain");
         }
         match child.try_wait() {
@@ -127,7 +124,7 @@ fn run_bounded(
             }
         }
         if Instant::now() >= end {
-            let reaped = stop(&mut child);
+            let reaped = terminate_unreaped(&mut child);
             bail!("Git command timed out after {} seconds; process-group termination attempted (leader reaped: {reaped}); processes and external effects remain uncertain", deadline.as_secs());
         }
         std::thread::sleep(Duration::from_millis(10));
