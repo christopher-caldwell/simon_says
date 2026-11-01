@@ -1,0 +1,5 @@
+# Dynamic simulation and repair fixture
+
+This deterministic fixture demonstrates workflow-authored routing through configurable roles. A simulator records an observation; an independent reviewer inspects its exact candidate and selects a declared `issues` or `clean` route. When issues are present, the controller dispatches the configured repair specialist, reviews its candidate, and returns to simulation. A frozen transition bound limits repeated repairs. This fixture is not a Magic simulator or a real model-provider test.
+
+Copy this example into a new Git repository, commit the files, and run `simon-says run workflow.toml --project . --run-dir /absolute/new/run`. The default deliberately broken input exercises one repair. Set `engine.json` to `{"correct":true}` before the initial commit for a clean route, or set `mode.json` to `{"mode":"permanent"}` for a bounded repair loop. The run directory preserves packets, route decisions, checkpoints and results; no issue-driven dynamic role is hard-coded in Rust.

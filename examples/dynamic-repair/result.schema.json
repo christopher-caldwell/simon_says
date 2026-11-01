@@ -1,0 +1,1 @@
+{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":false,"required":["issue","attempt","observed_value"],"properties":{"issue":{"type":"boolean"},"attempt":{"type":"integer","minimum":1},"observed_value":{"type":"integer"}}}

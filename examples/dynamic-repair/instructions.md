@@ -1,0 +1,1 @@
+Run the configured stage and preserve the reported issue, exact candidate and repair evidence. The reviewer selects only a declared route. The simulation and repair are deterministic demonstration tasks, not a Magic simulator or model-provider test.

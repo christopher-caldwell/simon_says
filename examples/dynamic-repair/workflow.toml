@@ -1,0 +1,44 @@
+schema_version = 1
+name = "dynamic-repair-example"
+purpose = "Route a reported simulated issue to a configured repair role, then rerun verification."
+start = "simulate"
+max_stage_transitions = 4
+frozen_project_files = ["workflow.toml", "action.py", "instructions.md", "result.schema.json", "repair.schema.json", "mode.json"]
+
+[roles.simulator]
+kind = "command"
+argv = ["python3", "-B", "action.py", "simulator"]
+[roles.repair_specialist]
+kind = "command"
+argv = ["python3", "-B", "action.py", "repair_specialist"]
+[roles.quality_reviewer]
+kind = "command"
+argv = ["python3", "-B", "action.py", "quality_reviewer"]
+[roles.stop]
+kind = "command"
+argv = ["python3", "-B", "action.py", "stop"]
+
+[stages.simulate]
+worker = "simulator"
+reviewer = "quality_reviewer"
+unblocker = "stop"
+instructions = "instructions.md"
+inputs = ["engine.json", "mode.json"]
+outputs = ["simulation.json"]
+output_schema = "result.schema.json"
+on_pass = "complete"
+max_review_cycles = 2
+[stages.simulate.routes]
+issues = "repair"
+clean = "complete"
+
+[stages.repair]
+worker = "repair_specialist"
+reviewer = "quality_reviewer"
+unblocker = "stop"
+instructions = "instructions.md"
+inputs = ["simulation.json", "engine.json", "mode.json"]
+outputs = ["repair.json"]
+output_schema = "repair.schema.json"
+on_pass = "simulate"
+max_review_cycles = 2
