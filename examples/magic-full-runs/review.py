@@ -53,8 +53,15 @@ def review_stage(stage, packet):
     elif stage == "analyze":
         analysis = load("analysis.json")
         collection = load("collection.json")
-        if analysis["original_question"] != packet.get("run_context") or analysis["verified_games"] != collection["eligible"] or analysis["issues"] != collection["issues"]:
-            raise ChangesRequired("Correct the analysis to preserve the exact original question, verified count, and full issue inventory.")
+        errors = []
+        if analysis["original_question"] != packet.get("run_context"):
+            errors.append("set original_question exactly to packet.run_context")
+        if analysis["verified_games"] != collection["eligible"]:
+            errors.append("set verified_games to collection.eligible (eligible games, not verified attempts)")
+        if analysis["issues"] != collection["issues"]:
+            errors.append("set issues exactly to collection.issues; put supplemental detail in answer or limitations")
+        if errors:
+            raise ChangesRequired("; ".join(errors))
         report = "Mechanically checked original question, verified count and issues; this check does not certify the Analyzer's judgment."
     else:
         raise ValueError("unknown stage")
