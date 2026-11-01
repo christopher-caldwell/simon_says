@@ -69,10 +69,30 @@ class Contract(unittest.TestCase):
             self.assertEqual(json.loads(p.stdout)['outcome'], 'blocked')
 
     def test_triage_cannot_lose_issue_inventory(self):
-        s = (HERE / 'review.py').read_text()
-        self.assertIn("a['issues'] != g['issues']", s)
-        self.assertIn("a['eligible_games'] != verified['eligibleGames']", s)
-        self.assertIn("simon-four/verify.py verify-post", (HERE / 'triage.md').read_text())
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'simon-game').mkdir()
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.name', 'Test'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', 'user.email', 'test@example.invalid'], check=True)
+            (root / 'x').write_text('x')
+            subprocess.run(['git', '-C', str(root), 'add', 'x'], check=True)
+            subprocess.run(['git', '-C', str(root), 'commit', '-qm', 'baseline'], check=True)
+            head = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+            (root / 'review.py').write_text((HERE / 'review.py').read_text())
+            (root / 'simon-game/game.py').write_text("def verify_game(*args): return {'eligibleGames': 8}, []\n")
+            (root / 'simon-game/native.py').write_text("import json\nfrom pathlib import Path\ndef load(p): return json.loads(Path(p).read_text())\ndef frozen_files(): return None,{}\ndef tool_source(f): return None,None,None\n")
+            (root / 'packet.json').write_text(json.dumps({'stage': 'triage', 'gate': 'reviewer',
+                'action_id': 'a', 'candidate_commit': head, 'run_context': 'question'}))
+            issues = {'all_warnings': {'engine_warning': 2}}
+            (root / 'verification.json').write_text(json.dumps({'issues': issues}))
+            env = dict(os.environ, SIMON_PACKET=str(root / 'packet.json'))
+            for count, saved, expected in [(8, issues, 'pass'), (7, issues, 'changes_required'), (8, {}, 'changes_required')]:
+                (root / 'triage.json').write_text(json.dumps({'original_question': 'question', 'eligible_games': count, 'issues': saved}))
+                p = subprocess.run(['python3', '-B', 'review.py'], cwd=root, env=env, text=True, capture_output=True)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(json.loads(p.stdout)['outcome'], expected)
+        self.assertIn('simon-four/verify.py verify-post', (HERE / 'triage.md').read_text())
 
 
 if __name__ == '__main__':
