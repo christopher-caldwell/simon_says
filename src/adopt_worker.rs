@@ -19,11 +19,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const LIMIT: u64 = 64 * 1024 * 1024;
+pub(crate) const LIMIT: u64 = 64 * 1024 * 1024;
 const IGNORED_STOP: &str =
     "managed worktree contains ignored or untracked files; preserve them and reconcile explicitly";
 
-fn directory(path: &Path) -> Result<()> {
+pub(crate) fn directory(path: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(path)?;
     ensure!(
         meta.is_dir() && !meta.file_type().is_symlink(),
@@ -33,7 +33,7 @@ fn directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read(path: &Path, limit: u64) -> Result<Vec<u8>> {
+pub(crate) fn read(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let before = fs::symlink_metadata(path)?;
     ensure!(
         before.is_file() && !before.file_type().is_symlink() && before.len() <= limit,
@@ -66,7 +66,7 @@ fn read(path: &Path, limit: u64) -> Result<Vec<u8>> {
     ensure!(data.len() as u64 <= limit, "oversized recovery record");
     Ok(data)
 }
-fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
+pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     Ok(serde_json::from_slice(&read(path, LIMIT)?)?)
 }
 

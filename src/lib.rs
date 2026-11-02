@@ -653,6 +653,7 @@ pub mod provider;
 
 pub mod git;
 
+pub mod adopt_reviewer;
 pub mod adopt_worker;
 pub mod controller;
 

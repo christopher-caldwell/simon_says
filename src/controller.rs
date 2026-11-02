@@ -478,7 +478,8 @@ fn verify_pending_route(
         response.action_id == pending.review_action
             && response.outcome == "pass"
             && response.inspected_commit.as_deref() == Some(pending.commit.as_str())
-            && response.candidate_commit.is_none()
+            && (response.candidate_commit.is_none()
+                || response.candidate_commit.as_deref() == Some(pending.commit.as_str()))
             && if packet.get("candidate_route").is_some() {
                 response.route.is_none()
                     && packet["candidate_route"].as_str() == pending.route.as_deref()

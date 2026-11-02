@@ -438,3 +438,22 @@ fn response_accepts_nonempty_structured_report_as_opaque_feedback() {
         assert!(serde_json::from_value::<Response>(input).is_err());
     }
 }
+
+#[test]
+fn reviewer_may_echo_but_not_replace_the_exact_candidate() {
+    let (w, mut s) = dynamic();
+    act(&mut s, &w, "complete", Some("candidate"), None);
+    s.start("review".into()).unwrap();
+    let mut response = Response {
+        action_id: "review".into(),
+        outcome: "pass".into(),
+        report: "reviewed".into(),
+        candidate_commit: Some("other".into()),
+        inspected_commit: Some("candidate".into()),
+        route: Some("issues".into()),
+    };
+    assert!(s.apply(&w, response.clone()).is_err());
+    response.candidate_commit = Some("candidate".into());
+    s.apply(&w, response).unwrap();
+    assert_eq!(s.stage, "report");
+}

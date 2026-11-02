@@ -225,8 +225,10 @@ impl State {
             }
             (Gate::Reviewer, "pass" | "changes_required" | "blocked") => {
                 ensure!(
-                    response.candidate_commit.is_none(),
-                    "reviewer cannot nominate candidate"
+                    response.candidate_commit.is_none()
+                        || (self.candidate_commit.is_some()
+                            && response.candidate_commit == self.candidate_commit),
+                    "reviewer cannot nominate a different candidate"
                 );
                 ensure!(
                     response.inspected_commit.as_deref() == self.candidate_commit.as_deref()

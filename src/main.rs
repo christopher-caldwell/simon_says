@@ -74,6 +74,18 @@ enum Command {
         #[arg(long)]
         acknowledge_external_effects: bool,
     },
+    /// Adopt a recorded Reviewer that echoed its exact inspected candidate, without rerunning it.
+    AdoptReviewer {
+        run_dir: PathBuf,
+        #[arg(long)]
+        expected_action: String,
+        #[arg(long)]
+        expected_candidate: String,
+        #[arg(long)]
+        acknowledge_external_effects: bool,
+        #[arg(long)]
+        reconcile_check: bool,
+    },
     /// Adopt a recorded completed Worker after safely reconciling its checkout, then inspect before resuming.
     AdoptWorker {
         run_dir: PathBuf,
@@ -175,6 +187,22 @@ fn main() -> Result<()> {
         } => {
             controller::reset(&run_dir, acknowledge_external_effects)?;
             println!("reset to recorded checkpoint; inspect status before resuming");
+        }
+        Command::AdoptReviewer {
+            run_dir,
+            expected_action,
+            expected_candidate,
+            acknowledge_external_effects,
+            reconcile_check,
+        } => {
+            let record = simon_says::adopt_reviewer::adopt(
+                &run_dir,
+                &expected_action,
+                &expected_candidate,
+                acknowledge_external_effects,
+                reconcile_check,
+            )?;
+            print_result(record)?;
         }
         Command::AdoptWorker {
             run_dir,
