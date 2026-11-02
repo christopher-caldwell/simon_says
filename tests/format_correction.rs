@@ -10,14 +10,16 @@ mode=os.environ['TEST_MODE']
 if prompt.startswith('Your completed action'):
     if mode == 'bad': response={'route':'unauthorized'}
     elif mode == 'bad_format': response='still not json'
-    elif mode == 'malformed': response={'action_id':p['action_id'],'outcome':'complete','report':'finished','route':'done'}
+    elif mode == 'malformed':
+        assert 'route at the top level' in prompt and 'not inside report' in prompt
+        response={'action_id':p['action_id'],'outcome':'complete','report':'finished','route':'done'}
     else: response={'route':'done'}
 else:
     pathlib.Path('result.json').write_text('{"completed":true}\n')
     response={'action_id':p['action_id'],'outcome':'complete','report':'The route is done.'}
     if mode == 'provider_failure': sys.exit(4)
     if mode == 'bad_identity': response.pop('action_id')
-    if mode == 'malformed': response='not json but finished'
+    if mode == 'malformed': response=json.dumps({'action_id':p['action_id'],'outcome':'complete','report':{'route':'done'}})[:-1]
     elif mode == 'valid': response['route']='done'
 text=response if isinstance(response,str) else json.dumps(response)
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':text}}))

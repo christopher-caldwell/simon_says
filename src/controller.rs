@@ -437,7 +437,12 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
                 let labels: Vec<_> = stage.routes.keys().collect();
                 format!("Your completed action omitted the required top-level route. Return only a JSON object with one field named route, containing your intended choice from the allowed labels. Follow your original report; never invent a decision. If it does not state a choice, return {{\"route\":null}}. Do not use tools, change files, or repeat any work. Allowed labels: {}. Original report: {}", serde_json::to_string(&labels)?, serde_json::to_string(report)?)
             } else {
-                format!("Your completed action did not return the required JSON response. Reformat your original response as one JSON object with action_id, outcome, report, and any applicable route, candidate_commit, and inspected_commit fields. Preserve the original meaning and action identity; do not invent a decision. Do not use tools, change files, or repeat any work. Original response: {}", serde_json::to_string(original)?)
+                let route_instruction = if stage.worker_selects_route() {
+                    format!(" If complete, put route at the top level, alongside action_id, outcome, and report, not inside report. Use the decision in your original response and select one allowed route: {}.", serde_json::to_string(&stage.routes.keys().collect::<Vec<_>>())?)
+                } else {
+                    String::new()
+                };
+                format!("Your completed action did not return the required JSON response. Reformat your original response as one JSON object with action_id, outcome, report, and any applicable route, candidate_commit, and inspected_commit fields.{route_instruction} Preserve the original meaning and action identity; do not invent a decision. Do not use tools, change files, or repeat any work. Original response: {}", serde_json::to_string(original)?)
             };
             let correction_dir = dir.join("format-correction");
             fs::create_dir(&correction_dir)?;
