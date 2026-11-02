@@ -428,7 +428,14 @@ fn codex_requires_started_work_to_complete_and_allows_concurrent_items() {
         )
         .unwrap();
         plan.adapter = "codex".into();
-        assert_eq!(invoke(&plan, dir.path()).is_ok(), complete);
+        let result = invoke(&plan, dir.path());
+        assert_eq!(result.is_ok(), complete);
+        if !complete {
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("action may be unfinished"));
+        }
     }
 }
 #[test]

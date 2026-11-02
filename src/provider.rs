@@ -637,7 +637,7 @@ pub fn invoke(plan: &InvocationPlan, action_dir: &Path) -> Result<InvocationOutc
         );
         ensure!(
             native_terminal_success(&text, &plan.adapter),
-            "native provider omitted a terminal success event; action and external effects remain uncertain"
+            "native provider did not produce a complete, consistent successful turn (for example, an action may be unfinished); inspect the action log; execution remains uncertain"
         );
     }
     let (response, session_id) = if plan.adapter == "command" {
