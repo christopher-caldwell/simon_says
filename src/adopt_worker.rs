@@ -1,4 +1,4 @@
-//! Explicit recovery of a completed Worker response after mechanical checking stopped.
+//! Explicit recovery of a completed Worker response after supported mechanical stops.
 //! No checkout content is moved or removed here; operators must preserve and
 //! reconcile unexpected files separately before attempting adoption.
 use crate::{
@@ -89,9 +89,13 @@ pub fn adopt(
             && record.state.action_id.as_deref() == Some(expected_action),
         "run is not the expected running Worker action"
     );
+    let stop_reason = record.state.stop_reason.as_deref().unwrap_or("").to_owned();
+    let structured_report_stop = stop_reason.starts_with(
+        "invalid action response; reset required: invalid type: map, expected a string",
+    );
     ensure!(
-        record.state.stop_reason.as_deref() == Some(IGNORED_STOP),
-        "adoption requires the recorded ignored/untracked checkout stop"
+        stop_reason == IGNORED_STOP || structured_report_stop,
+        "adoption requires a supported recorded Worker stop"
     );
     let number = expected_action
         .strip_prefix("action-")
@@ -129,9 +133,23 @@ pub fn adopt(
     let outcome: provider::InvocationOutcome = read_json(&action.join("outcome.json"))?;
     let failure: Value = read_json(&action.join("failure.json"))?;
     ensure!(
-        failure["error"] == IGNORED_STOP,
+        failure["error"].as_str() == Some(stop_reason.as_str()),
         "failure record does not match recoverable stop"
     );
+    if structured_report_stop {
+        let raw: Value = serde_json::from_str(
+            outcome
+                .response
+                .as_deref()
+                .context("Worker response missing")?,
+        )?;
+        ensure!(
+            raw.get("report")
+                .and_then(Value::as_object)
+                .is_some_and(|m| !m.is_empty()),
+            "structured report recovery requires a nonempty object report"
+        );
+    }
     let mut env = BTreeMap::<String, PathBuf>::new();
     for (name, relative) in &role.scratch_env {
         let mut target = scratch.clone();

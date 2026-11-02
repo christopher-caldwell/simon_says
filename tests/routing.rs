@@ -414,3 +414,27 @@ fn rejected_candidate_cannot_reuse_its_route() {
         )
         .is_err());
 }
+
+#[test]
+fn response_accepts_nonempty_structured_report_as_opaque_feedback() {
+    let response: Response = serde_json::from_value(serde_json::json!({
+        "action_id": "action-1", "outcome": "complete",
+        "report": {"finding": "example", "details": {"count": 2}},
+        "candidate_commit": "candidate", "inspected_commit": null
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response.report).unwrap(),
+        serde_json::json!({"finding": "example", "details": {"count": 2}})
+    );
+    for invalid in [
+        serde_json::json!({}),
+        serde_json::json!([]),
+        serde_json::json!(null),
+        serde_json::json!(42),
+    ] {
+        let input = serde_json::json!({"action_id":"a", "outcome":"blocked", "report":invalid,
+            "candidate_commit":null, "inspected_commit":null});
+        assert!(serde_json::from_value::<Response>(input).is_err());
+    }
+}

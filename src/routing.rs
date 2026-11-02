@@ -28,12 +28,30 @@ pub enum Status {
 pub struct Response {
     pub action_id: String,
     pub outcome: String,
+    #[serde(deserialize_with = "deserialize_report")]
     pub report: String,
     pub candidate_commit: Option<String>,
     pub inspected_commit: Option<String>,
     /// A declared route label, selected by the configured gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+}
+// Reports are opaque feedback. Preserve structured objects as JSON text; routing
+// never interprets their fields. All identity and outcome checks remain strict.
+fn deserialize_report<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::String(value) => Ok(value),
+        serde_json::Value::Object(value) if !value.is_empty() => {
+            serde_json::to_string(&value).map_err(D::Error::custom)
+        }
+        _ => Err(D::Error::custom(
+            "report must be a string or nonempty JSON object",
+        )),
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

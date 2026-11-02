@@ -23,14 +23,15 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, String) {
-    fixture_with_options(false, false)
+    fixture_with_options(false, false, false)
 }
 fn fixture_with_invalid_output(invalid: bool) -> (tempfile::TempDir, PathBuf, PathBuf, String) {
-    fixture_with_options(invalid, false)
+    fixture_with_options(invalid, false, false)
 }
 fn fixture_with_options(
     invalid: bool,
     filtered: bool,
+    object_report: bool,
 ) -> (tempfile::TempDir, PathBuf, PathBuf, String) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
@@ -47,6 +48,9 @@ fn fixture_with_options(
     }
     let script = repo.join("workflow_action.py");
     let mut text = fs::read_to_string(&script).unwrap();
+    if object_report {
+        text = text.replace("\"report\": report,", "\"report\": {\"message\": report},");
+    }
     if invalid {
         text = text.replace(
             "Path(path).write_text(json.dumps(expected, indent=2) + \"\\n\")",
@@ -306,7 +310,7 @@ fn legacy_packet_without_empty_scratch_environment_is_supported() {
 }
 #[test]
 fn interrupted_adoption_check_requires_explicit_reconciliation() {
-    let (tmp, repo, run, candidate) = fixture_with_options(false, true);
+    let (tmp, repo, run, candidate) = fixture_with_options(false, true, false);
     preserve(&run);
     let marker = tmp.path().join("filter-marker");
     let script = tmp.path().join("slow-filter.sh");
@@ -372,4 +376,54 @@ fn interrupted_adoption_check_requires_explicit_reconciliation() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(state(&run)["state"]["gate"], "reviewer");
+}
+
+#[test]
+fn adopts_recorded_structured_report_without_replaying_worker() {
+    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, true);
+    preserve(&run);
+    let legacy = "invalid action response; reset required: invalid type: map, expected a string at line 1 column 54";
+    let state_path = run.join("state.json");
+    let mut record: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    record["state"]["stop_reason"] = legacy.into();
+    fs::write(state_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let failure_path = run.join("actions/action-0/failure.json");
+    fs::write(
+        failure_path,
+        serde_json::to_vec(&serde_json::json!({"error":legacy})).unwrap(),
+    )
+    .unwrap();
+    let out = adopt(&run, "action-0", &candidate, true);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let after = state(&run);
+    assert_eq!(after["state"]["gate"], "reviewer");
+    assert!(after["state"]["feedback"][0]
+        .as_str()
+        .unwrap()
+        .contains("message"));
+    assert!(!run.join("actions/action-1").exists());
+}
+
+#[test]
+fn structured_report_recovery_rejects_a_string_report() {
+    let (_tmp, _repo, run, candidate) = fixture();
+    preserve(&run);
+    let legacy = "invalid action response; reset required: invalid type: map, expected a string at line 1 column 54";
+    let state_path = run.join("state.json");
+    let mut record: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    record["state"]["stop_reason"] = legacy.into();
+    fs::write(state_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    fs::write(
+        run.join("actions/action-0/failure.json"),
+        serde_json::to_vec(&serde_json::json!({"error":legacy})).unwrap(),
+    )
+    .unwrap();
+    let out = adopt(&run, "action-0", &candidate, true);
+    assert!(!out.status.success());
+    assert_eq!(state(&run)["state"]["status"], "running");
+    assert!(!run.join("actions/action-1").exists());
 }
