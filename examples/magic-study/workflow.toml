@@ -1,0 +1,71 @@
+schema_version = 1
+name = "magic-study"
+purpose = "Prepare a Magic simulation, run it, repair observed engine issues when needed, and answer the question."
+start = "investigate"
+max_stage_transitions = 8
+frozen_project_files = ["study/question.md"]
+
+[roles.investigator]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+profile = "investigator.md"
+
+[roles.supervisor]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+profile = "supervisor.md"
+timeout_seconds = 7200
+
+[roles.fixer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "high"
+profile = "fixer.md"
+timeout_seconds = 3600
+
+[roles.analyzer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+profile = "analyzer.md"
+
+[stages.investigate]
+worker = "investigator"
+instructions = "instructions.md"
+inputs = ["study/question.md"]
+outputs = ["study/design.json", "study/payload/giada.json", "study/payload/miirym-cp3.json", "study/payload/miirym-cp4.json"]
+on_pass = "supervise"
+
+[stages.supervise]
+worker = "supervisor"
+instructions = "instructions.md"
+inputs = ["study/question.md", "study/design.json", "study/payload/giada.json", "study/payload/miirym-cp3.json", "study/payload/miirym-cp4.json"]
+protected_inputs = ["study/question.md", "study/design.json", "study/payload/giada.json", "study/payload/miirym-cp3.json", "study/payload/miirym-cp4.json"]
+outputs = ["study/supervision.json"]
+on_pass = "analyze"
+
+[stages.supervise.routes]
+fix = "repair"
+analyze = "analyze"
+
+[stages.repair]
+worker = "fixer"
+instructions = "instructions.md"
+inputs = ["study/supervision.json"]
+protected_inputs = ["study/supervision.json"]
+outputs = ["study/repair.json"]
+on_pass = "analyze"
+
+[stages.analyze]
+worker = "analyzer"
+instructions = "instructions.md"
+inputs = ["study/question.md", "study/design.json", "study/supervision.json"]
+protected_inputs = ["study/question.md", "study/design.json", "study/supervision.json"]
+outputs = ["study/analysis.json"]
+on_pass = "complete"

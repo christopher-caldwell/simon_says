@@ -1,0 +1,3 @@
+Prepare the complete simulation payload for the question in `study/question.md`. Read the project's simulation documentation and use its actual tools and file formats.
+
+Choose the specified focal decks, opponent lists, pod, game counts, runtime, and fresh assignment identities. Write three runnable configuration files at the paths declared in your action packet. Write `study/design.json` with the question, exact input paths, configuration paths, run commands, counts, and the evidence the Analyzer will need. Verify that the files can be used by the real simulator. Do not start games or create run assignments. Do not leave the Supervisor to construct the configurations.

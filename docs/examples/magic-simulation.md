@@ -1,78 +1,31 @@
-# Example: Magic deck simulation workflow
+# Example: a Magic simulation
 
-**Status:** illustrative validation target; no claim that these file names or scripts match the current Magic repository. The implementation team must inspect and adapt to actual interfaces before executing it.
+A Magic study can use the same Simon controller as a CSV study. The workflow describes the roles and their handoffs; the models use the Magic project's tools and rules. Start with the [Magic example](../../examples/magic-study/README.md).
 
-## Scenario
-
-A user creates or updates a Magic: The Gathering Commander deck. Existing simulation tooling should evaluate it, check the results, correct routine problems, and produce an analysis. A high-intelligence agent should not be doing repetitive command orchestration while scripts or smaller models can do the work.
-
-## Proposed stage contracts
-
-### Stage `simulate`
-
-**Starting inputs:** a decklist, simulation settings, and installed simulation tooling.
-
-**Worker:** deterministic command script or low-cost agent that calls the existing simulator, records the exact command/settings, and writes structured results.
-
-**Required output:** simulation results with deck identity, settings, run count, and the metrics the real simulator actually supports. Avoid fabricated statistics or schema fields. Output shape should be agreed from real simulator output.
-
-**Mechanical checks:** output exists, is Git-visible at the reported candidate commit, parses under its frozen schema, reports the expected deck identity, and meets any declared executable verifier checks (e.g. observed trial count).
-
-**Reviewer:** checks whether the experiment was run correctly, whether the measurements answer the user's question, whether bias or missing data requires changes, and whether conclusions are supported. `pass` routes to `analyze`; `changes_required` returns concrete correction guidance; `blocked` invokes Unblocker.
-
-**Unblocker:** diagnoses missing tooling, incompatible input, environmental failures, or an unresolved assumption. It does not invent replacement simulation results. If a correction can safely enable retry, it returns `retry`; otherwise stops with evidence.
-
-### Stage `analyze`
-
-**Inputs:** the accepted simulation output at the exact earlier checkpoint.
-
-**Worker:** analytic agent (potentially higher effort) with an explicit profile for interpreting results, limitations, and comparison goals.
-
-**Required output:** an analysis artifact that references the exact simulation results and distinguishes observation from recommendation. Optionally a machine-readable summary.
-
-**Mechanical checks:** required output exists, references recorded source identity, parses under the chosen schema, and is part of a candidate commit.
-
-**Reviewer:** determines whether the interpretation accurately reflects the experiments and supports claims. Pass completes the workflow; changes required returns to the analyst.
-
-## Example routing
+The intended flow is:
 
 ```text
-simulate.Worker
-  -> mechanical output validation
-  -> simulate.Reviewer
-      pass -> analyze.Worker
-      changes_required -> simulate.Worker
-      blocked -> simulate.Unblocker -> retry simulate.Reviewer / stop
-
-analyze.Worker
-  -> mechanical output validation
-  -> analyze.Reviewer
-      pass -> COMPLETE
-      changes_required -> analyze.Worker
-      blocked -> analyze.Unblocker -> retry / stop
+Investigator prepares the payload
+              ↓
+Supervisor runs the simulation and records issues
+              ↓
+       Is repair needed?
+       yes ↓       no ↓
+         Fixer     Analyzer
+           ↓
+         Analyzer
 ```
 
-For a Worker blocker, retry begins at the original Worker gate. For a Reviewer blocker, retry begins at Review and retains the exact validated candidate unless the explicit correction changes it. The controlling commit and feedback must be unambiguous.
+The Investigator prepares the actual deck inputs, opponent lists, pod, game counts, and runnable simulator configurations. The Supervisor runs that payload, monitors the games, and records engine issues from this run. The Fixer works on the reported engine issues when the Supervisor selects `fix`. The Analyzer interprets the results and answers the original question.
 
-## Sample model-authored template sketch
+Simon provides the role's profile, stage instructions, declared inputs, and any run context to each dispatched model. The profile must describe that role's actual responsibility. A profile file named in a workflow is read and frozen by Simon; other project instructions are not automatically substituted for that profile. If a role needs another file, say so explicitly and ensure it is available in the project checkout.
 
-The [template specification](../design/workflow-template.md) contains an illustrative TOML file. The example's actual simulator, paths, and contracts are intentionally left to a model *after reading the real Magic repo*. That is central to this product: the runtime doesn't require one fixed deck simulation output schema or a hardcoded Magic phase.
+The example assumes a real Magic project with its simulator and decks already available. `simon-says validate` checks the template; it does not prove the simulator is installed, the models will follow instructions, or the games are correct.
 
-## Acceptance exercise
+## What happened in the local studies
 
-1. Run a valid deck from a known clean Git baseline.
-2. Deliberately cause Reviewer to reject a materially incomplete simulation result; confirm full feedback returns to the Worker, not just a bare PASS/FAIL token.
-3. Induce a legitimate recoverable block, such as a missing dependency in a controlled fixture. Confirm the Unblocker gets originating gate and context and attempts one bounded retry.
-4. Induce a second block; verify a clean stop, not recursive AI orchestration.
-5. Kill the controller after persisting `running` but before the action completes; fresh `status` and `resume` must not guess that it is safe to replay.
-6. Confirm every accepted stage has a precise Git commit and that no unreviewed candidate is presented as final output.
+A six game test used the same four role design, with two games each for Giada CP3, Miirym CP3, and Miirym CP4. Simon dispatched Investigator, Supervisor, and Analyzer in one run. The Investigator produced the three configurations; the Supervisor ran all six games and reported warnings. It did not identify a confirmed issue that required repair, so the Fixer route was not exercised. The run completed at `magic-role-boundary-run-20261102`, accepted commit `5a86625bc9c696b73767a0883e0361d0fd830020`.
 
-## Domain-specific questions to settle from real code
+A later study assigned 300 games to each checkpoint. It recorded 299 eligible Giada games, 300 eligible Miirym CP3 games, and 300 eligible Miirym CP4 games. One Giada game timed out and was excluded. The Supervisor routed that issue to the Fixer; the Fixer could not establish a cause or a verified repair and returned blocked. Simon stopped as configured. The Analyzer was started in a separate Simon continuation with the preserved results and the Fixer's report. No games were repeated for that continuation. The original run is `magic-900-study-exact-20261102`; the analysis continuation is `magic-900-analysis-20261102`.
 
-- What are the actual simulator entry points, CLI flags, inputs, and output locations?
-- Are outputs deterministic/reproducible, and what random seed belongs in the contract?
-- Which metrics are emitted versus inferred in analysis?
-- Do simulations produce huge intermediate artifacts that should remain outside Git?
-- Can all v0 tool operations stay within the Git worktree, or are external services involved?
-
-The model-authoring guide should collect these answers from the repository and form the concrete workflow. Do not hardcode guesses into Rust.
+The larger study demonstrates automatic dispatch to the Fixer, but not an uninterrupted complete workflow through analysis after a blocked repair. The game counts do not certify the simulator's rules or prove that the decks are optimized. The analysis compared selected lists in a particular opponent pod, not alternative versions of those lists.

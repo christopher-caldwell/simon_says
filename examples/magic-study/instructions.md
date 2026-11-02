@@ -1,0 +1,3 @@
+Follow your assigned profile and the user's question in `study/question.md`. Use the project's real tools and record the evidence needed for the next role. Do not create other agents or chats; Simon dispatches the roles. Do not run games beyond the user's request, repeat prior assignments, or erase evidence. If you cannot complete the role, explain the blocker.
+
+When a route is required, return it as a top level field in your response JSON. For example: `{"action_id":"action-1","outcome":"complete","report":"The runs finished.","route":"analyze"}`. Select only a route listed in the action packet.

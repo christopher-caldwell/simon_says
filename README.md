@@ -4,6 +4,8 @@ Simon Says is an early local, sequential workflow runner. A TOML definition assi
 
 Its core jobs are to read the workflow, launch its configured roles, pass their reports and declared files between stages, follow the workflow's declared routes, and preserve run state. A model or tool performs the work defined by its role; Simon does not decide domain-specific answers.
 
+New to Simon? Start with the [getting started guide](docs/getting-started.md), the [CSV example](examples/csv-questions/README.md), or the [Magic simulation example](examples/magic-study/README.md).
+
 ```sh
 cargo test
 cargo run -- validate examples/data-report/workflow.toml

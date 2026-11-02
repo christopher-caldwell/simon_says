@@ -1,0 +1,3 @@
+Run the Investigator's prepared configurations with the project's real simulator. Watch the runs until they finish or cannot continue safely. Do not change the payload, make new assignments beyond the request, or decide whether a deck is good.
+
+Record run IDs, counts, exclusions, output locations, and any engine issues observed during this run in `study/supervision.json` and the project's issue backlog. Give the Fixer enough evidence to investigate. Return `complete` with route `fix` if an issue from this run needs repair, or `complete` with route `analyze` when no repair is needed. Report a genuine blocker instead of inventing results.
