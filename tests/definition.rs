@@ -304,3 +304,16 @@ fn command_role_errors_identify_agent_only_fields() {
     let error = Workflow::parse_and_validate(&empty, root.path()).unwrap_err();
     assert!(format!("{error:#}").contains("nonempty argv"));
 }
+
+#[test]
+fn csv_model_workflow_is_valid_and_has_three_authored_roles() {
+    let root = Path::new("examples/csv-questions");
+    let template = fs::read_to_string(root.join("workflow.toml")).unwrap();
+    let (workflow, _) = Workflow::parse_and_validate(&template, root).unwrap();
+    assert_eq!(workflow.stages["questions"].worker, "question_writer");
+    assert_eq!(workflow.stages["gather"].worker, "code_runner");
+    assert_eq!(workflow.stages["analyze"].worker, "analyst");
+    assert_eq!(workflow.stages["questions"].on_pass, "gather");
+    assert_eq!(workflow.stages["gather"].on_pass, "analyze");
+    assert_eq!(workflow.stages["analyze"].on_pass, "complete");
+}

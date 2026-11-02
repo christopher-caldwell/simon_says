@@ -1,0 +1,69 @@
+schema_version = 1
+name = "csv-questions"
+purpose = "Prepare questions about a CSV, run code to gather evidence, and answer the questions."
+start = "questions"
+frozen_project_files = ["workflow.toml", "data.csv", "instructions.md", "questions-profile.md", "code-profile.md", "analysis-profile.md", "review.py", "questions.schema.json", "evidence.schema.json", "answers.schema.json"]
+
+[roles.question_writer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+profile = "questions-profile.md"
+timeout_seconds = 300
+
+[roles.code_runner]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+profile = "code-profile.md"
+timeout_seconds = 300
+
+[roles.analyst]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+profile = "analysis-profile.md"
+timeout_seconds = 300
+
+[roles.checker]
+kind = "command"
+argv = ["python3", "-B", "review.py"]
+timeout_seconds = 30
+
+[stages.questions]
+worker = "question_writer"
+reviewer = "checker"
+unblocker = "checker"
+instructions = "instructions.md"
+inputs = ["data.csv"]
+outputs = ["questions.json"]
+output_schema = "questions.schema.json"
+on_pass = "gather"
+max_review_cycles = 1
+
+[stages.gather]
+worker = "code_runner"
+reviewer = "checker"
+unblocker = "checker"
+instructions = "instructions.md"
+inputs = ["data.csv", "questions.json"]
+protected_inputs = ["questions.json"]
+outputs = ["evidence.json"]
+output_schema = "evidence.schema.json"
+on_pass = "analyze"
+max_review_cycles = 1
+
+[stages.analyze]
+worker = "analyst"
+reviewer = "checker"
+unblocker = "checker"
+instructions = "instructions.md"
+inputs = ["data.csv", "questions.json", "evidence.json"]
+protected_inputs = ["questions.json", "evidence.json"]
+outputs = ["answers.json"]
+output_schema = "answers.schema.json"
+on_pass = "complete"
+max_review_cycles = 1

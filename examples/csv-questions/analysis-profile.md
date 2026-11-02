@@ -1,0 +1,1 @@
+Read data.csv, questions.json, and evidence.json. Answer every question using the recorded evidence and identify each answer by question_id. State the answer in plain language, without inventing information. Write answers.json in the packet's schema, commit it, and return the action response.
