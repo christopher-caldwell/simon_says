@@ -1,0 +1,1 @@
+The configured observation role records its result and selects the declared issue or clean route. The reviewer checks the selected route against the observation. If an issue is reported, the configured repair role acts, and the workflow returns to observation. This is a generic deterministic fixture.

@@ -138,3 +138,49 @@ fn reviewer_refuses_normalizer_that_changes_amounts() {
             .unwrap_or("")
             .contains("without changing record values")));
 }
+
+#[test]
+fn data_auditor_can_select_the_normalizer_and_recheck() {
+    let (_temp, repo, run_dir) = fixture("[{\"id\":\"books\",\"amount\":\" 7.25 \"}]");
+    let workflow_path = repo.join("workflow.toml");
+    let workflow = fs::read_to_string(&workflow_path).unwrap().replacen(
+        "[stages.audit.routes]",
+        "route_selector = \"worker\"\n[stages.audit.routes]",
+        1,
+    );
+    fs::write(workflow_path, workflow).unwrap();
+    let action_path = repo.join("action.py");
+    let action = fs::read_to_string(&action_path).unwrap().replace(
+        "candidate=commit('audit.json'))",
+        "candidate=commit('audit.json'), route='needs_cleanup' if report['needs_cleanup'] else 'done')")
+        .replace("respond(packet, 'pass', 'Verified audit and selected declared route.', inspected=head, route=route)",
+        "respond(packet, 'pass' if packet['candidate_route'] == route else 'changes_required', 'Verified audit and proposed route.', inspected=head)");
+    fs::write(action_path, action).unwrap();
+    git(&repo, &["add", "workflow.toml", "action.py"]);
+    git(
+        &repo,
+        &["commit", "-qm", "Configure auditor-directed routes"],
+    );
+    let result = run(&repo, &run_dir);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        json(&run_dir.join("state.json"))["state"]["status"],
+        "complete"
+    );
+    assert_eq!(
+        json(&run_dir.join("actions/action-1/packet.json"))["candidate_route"],
+        "needs_cleanup"
+    );
+    assert_eq!(
+        json(&run_dir.join("actions/action-2/packet.json"))["role"],
+        "normalizer"
+    );
+    assert_eq!(
+        json(&run_dir.join("worktree/audit.json"))["needs_cleanup"],
+        0
+    );
+}

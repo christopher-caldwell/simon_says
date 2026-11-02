@@ -21,11 +21,11 @@ fn git(repo: &Path, args: &[&str]) {
     );
 }
 
-fn fixture(mode: &str, correct: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
+fn fixture_for(example: &str, mode: &str, correct: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
     fs::create_dir(&repo).unwrap();
-    for entry in fs::read_dir("examples/dynamic-repair").unwrap() {
+    for entry in fs::read_dir(format!("examples/{example}")).unwrap() {
         let entry = entry.unwrap();
         fs::copy(entry.path(), repo.join(entry.file_name())).unwrap();
     }
@@ -42,6 +42,10 @@ fn fixture(mode: &str, correct: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
     git(&repo, &["commit", "-qm", "baseline"]);
     let run = temp.path().join("run");
     (temp, repo, run)
+}
+
+fn fixture(mode: &str, correct: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    fixture_for("dynamic-repair", mode, correct)
 }
 
 fn cli(args: &[&str]) -> Output {
@@ -260,29 +264,14 @@ fn ignored_worker_file_prevents_review_and_is_not_deleted_by_reset() {
 
 #[test]
 fn worker_can_choose_repair_then_rerun_through_the_cli() {
-    let (_temp, repo, run_dir) = fixture("repairable", false);
-    let workflow_path = repo.join("workflow.toml");
-    let workflow = fs::read_to_string(&workflow_path).unwrap().replacen(
-        "[stages.simulate.routes]",
-        "route_selector = \"worker\"\n[stages.simulate.routes]",
-        1,
-    );
-    fs::write(&workflow_path, workflow).unwrap();
-    let action_path = repo.join("action.py");
-    let action = fs::read_to_string(&action_path).unwrap().replace(
-        "candidate=candidate)\n    if gate == \"worker\" and stage == \"repair\"",
-        "candidate=candidate, route=\"issues\" if result[\"issue\"] else \"clean\")\n    if gate == \"worker\" and stage == \"repair\"").replace(
-        "route=route)\n        if stage == \"repair\"",
-        "route=None)\n        if stage == \"repair\"");
-    fs::write(&action_path, action).unwrap();
-    git(&repo, &["add", "workflow.toml", "action.py"]);
-    git(
-        &repo,
-        &["commit", "-qm", "Configure worker-directed routing"],
-    );
+    let (_temp, repo, run_dir) = fixture_for("worker-dispatch", "repairable", false);
     success(run(&repo, &run_dir));
     assert_eq!(status(&run_dir)["state"]["status"], "complete");
     assert_eq!(action_response(&run_dir, 0)["route"], "issues");
+    assert!(action_response(&run_dir, 0)["report"]
+        .as_str()
+        .unwrap()
+        .contains("exited 7"));
     assert_eq!(
         read(&run_dir.join("actions/action-1/packet.json"))["candidate_route"],
         "issues"
@@ -292,4 +281,32 @@ fn worker_can_choose_repair_then_rerun_through_the_cli() {
         "repair_specialist"
     );
     assert_eq!(action_response(&run_dir, 4)["route"], "clean");
+    assert!(action_response(&run_dir, 4)["report"]
+        .as_str()
+        .unwrap()
+        .contains("exited 0"));
+}
+
+#[test]
+fn worker_selected_clean_route_skips_repair() {
+    let (_temp, repo, run_dir) = fixture_for("worker-dispatch", "repairable", true);
+    success(run(&repo, &run_dir));
+    assert_eq!(status(&run_dir)["state"]["status"], "complete");
+    assert_eq!(action_response(&run_dir, 0)["route"], "clean");
+    assert!(!run_dir.join("actions/action-2").exists());
+}
+
+#[test]
+fn worker_selected_repeated_failure_respects_transition_limit() {
+    let (_temp, repo, run_dir) = fixture_for("worker-dispatch", "permanent", false);
+    let output = run(&repo, &run_dir);
+    assert!(!output.status.success());
+    let state = status(&run_dir);
+    assert_eq!(state["state"]["status"], "stopped");
+    assert_eq!(
+        state["state"]["stop_reason"],
+        "workflow stage transition limit reached"
+    );
+    assert_eq!(state["state"]["stage_transitions"], 3);
+    assert!(!run_dir.join("actions/action-8").exists());
 }

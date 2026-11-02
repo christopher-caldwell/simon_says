@@ -1,0 +1,1 @@
+{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":false,"required":["issue_observed","repair_attempt","fix_applied"],"properties":{"issue_observed":{"const":true},"repair_attempt":{"type":"integer","minimum":1},"fix_applied":{"type":"boolean"}}}
