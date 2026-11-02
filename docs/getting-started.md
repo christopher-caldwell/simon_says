@@ -20,6 +20,14 @@ The workflow's TOML file and referenced profiles, instructions, and schemas are 
 
 Every role receives an action packet that includes the role profile, stage instructions, declared files, the prior handoff, and optional original task context. Define the job in the profile: do not assume Simon knows what an Investigator, Supervisor, Fixer, or Analyzer should do.
 
+## Reuse a workflow
+
+Keep the workflow and its role profiles the same when the task changes. Put the new question and supporting material in the run context and project input files. Assume every run can have different inputs. Each run has its own frozen snapshot, worktree, and records.
+
+For example, one Magic run can investigate improvements to a deck. A second run can use the first result and ask how the chosen deck performs against different opponents. Both runs use the same workflow. The Investigator prepares the task's simulation inputs as part of the run.
+
+Do not change a workflow just to accommodate a different question or dataset. Change it only when the user asks. If it cannot accept the requested input as written, report the limitation rather than silently altering the workflow.
+
 ## Run and inspect
 
 Install Rust and install the CLI from this repository with `cargo install --path .`. For model roles, install and authenticate the configured provider CLI. Prepare a clean Git project containing the files the workflow needs, then run:

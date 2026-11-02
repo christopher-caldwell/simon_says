@@ -6,6 +6,14 @@ This repository contains an **early generic runtime**, not an accepted v0 releas
 
 A stable Rust execution engine must run new model-authored workflows without requiring engine-code edits. A stage may dispatch its configured role directly to the next stage; review and unblocking are workflow choices. Preserve Orchestrate's durable Worker/Reviewer/Unblocker feedback and Git-checkpoint safety when those mechanisms are configured.
 
+## Reuse workflows with new inputs
+
+The workflow defines the roles, their responsibilities, and the permitted handoffs. Treat it as reusable. Assume each run may have a different question and different supporting inputs. Provide those as run context and project input files, not as changes to the workflow or its role profiles.
+
+Do not adjust a workflow because a new run has a different question, dataset, opponent, game count, or other task input. Change a workflow only when the user asks for that change. If an existing workflow cannot accept the requested input, report the specific limitation instead of silently changing the workflow. A role's job may include preparing the task's inputs; do not do that work yourself just to make the workflow seem ready.
+
+Separate questions can use separate runs of the same workflow. For example, one Magic run investigates improvements to a deck. A later run uses its result and a new question about competitive opponents. The workflow stays the same; each run has its own input and saved state.
+
 ## Rules
 
 - Treat `direction agreed` ADRs as user decisions. Treat `proposed` entries as recommendations to test, not settled authority.
