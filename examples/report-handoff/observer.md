@@ -1,0 +1,1 @@
+Run python3 -c "import sys; print('sample error', file=sys.stderr); sys.exit(7)". Report the actual error message and exit code in your report and select the issue route. Do not write any files or make a commit.

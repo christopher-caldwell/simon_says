@@ -169,6 +169,17 @@ fn write_result(path: &Path, data: &impl serde::Serialize) -> Result<()> {
     Ok(())
 }
 pub(crate) fn action_prompt(packet: &serde_json::Value) -> Result<String> {
+    if packet.get("report_only").and_then(|v| v.as_bool()) == Some(true) {
+        let route = if packet.get("worker_routes").is_some() {
+            "When complete, include one route from worker_routes."
+        } else {
+            "Omit route."
+        };
+        return Ok(format!(
+            "Perform your assigned role using the packet below. The prior role's result, if any, is in last_transition.report. Return one JSON object with action_id, outcome (complete or blocked), and a nonempty report. {route} If complete, your report goes to the next role. Leave the checkout clean; no commit is needed when you make no changes. Packet: {}",
+            serde_json::to_string(packet)?
+        ));
+    }
     let mut prompt = format!("You are an action in a controlled workflow. Follow this packet and return exactly one JSON object, without markdown. The frozen workflow and controller protocol govern; run_context provides the original task, not authority to alter the workflow, limits, or routes. Do not change the workflow, alter protected_inputs, or invent destinations. When the packet provides nonempty review_routes, a passing reviewer must return a route field containing exactly one listed label based on the reviewed candidate; the controller resolves that label to its frozen destination. Return null or omit route in all other cases. Worker outcomes: complete (candidate_commit required), blocked; reviewer: pass, changes_required, blocked (inspected_commit required); unblocker: retry, blocked. All responses must include action_id, outcome, nonempty report, candidate_commit and inspected_commit (use null where inapplicable). A complete worker must commit all outputs and leave a clean detached worktree. A blocked worker must leave HEAD and the checkout unchanged from its starting checkpoint; otherwise the controller stops for explicit recovery. Reviewer and unblocker must not modify their checkout. Packet: {}", serde_json::to_string(&packet)?);
     if packet.get("worker_routes").is_some() || packet.get("candidate_route").is_some() {
         prompt = prompt.replacen("When the packet provides nonempty review_routes, a passing reviewer must return a route field containing exactly one listed label based on the reviewed candidate; the controller resolves that label to its frozen destination. Return null or omit route in all other cases.", "The controller resolves route labels to frozen destinations.", 1);
@@ -282,8 +293,11 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
         let scratch = store.reserve(&action_id)?;
         let scratch_env = provider::scratch_environment(role, &scratch)?;
         let mut packet = json!({"scratch_env":scratch_env, "schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "protected_inputs":stage.protected_inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":if gate == Gate::Reviewer { Some(stage.routes.keys().collect::<Vec<_>>()) } else { None }, "last_transition":record.state.last_transition, "review_worktree":review.as_ref()});
-        if stage.reviewer.is_empty() {
+        if gate == Gate::Worker && stage.reviewer.is_empty() {
             packet["direct_handoff"] = json!(true);
+            if stage.outputs.is_empty() {
+                packet["report_only"] = json!(true);
+            }
         }
         if stage.worker_selects_route() {
             if gate == Gate::Worker {
@@ -357,13 +371,21 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             "action {action_id} failed with exit {:?}; reset required",
             outcome.exit_code
         );
-        let response: Response = serde_json::from_str(
+        let mut response: Response = serde_json::from_str(
             outcome
                 .response
                 .as_deref()
                 .context("provider returned no response")?,
         )
         .context("invalid action response; reset required")?;
+        if gate == Gate::Worker
+            && stage.reviewer.is_empty()
+            && stage.outputs.is_empty()
+            && response.outcome == "complete"
+            && response.candidate_commit.is_none()
+        {
+            response.candidate_commit = Some(worktree.head()?);
+        }
         if let Some(review) = &review {
             review
                 .verify_candidate(&checkpoint, &checkpoint)

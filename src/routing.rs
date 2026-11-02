@@ -82,6 +82,12 @@ pub struct Transition {
     pub reviewed_commit: String,
     pub review_action: String,
     pub selected_route: Option<String>,
+    /// The completed role's report, supplied to the next role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
+    /// Review feedback, when the workflow chose to review the result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_report: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
@@ -94,6 +100,9 @@ pub struct State {
     /// Route proposed by the Worker for the current candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate_route: Option<String>,
+    /// Report belonging to the current candidate, including during review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_report: Option<String>,
     pub feedback: Vec<String>,
     pub review_cycles: u32,
     pub unblock_origin: Option<Gate>,
@@ -119,6 +128,7 @@ impl State {
             accepted_commit: baseline,
             candidate_commit: None,
             candidate_route: None,
+            candidate_report: None,
             feedback: vec![],
             review_cycles: 0,
             unblock_origin: None,
@@ -219,6 +229,7 @@ impl State {
                 );
                 self.candidate_commit = Some(commit.to_owned());
                 self.candidate_route = response.route.clone();
+                self.candidate_report = Some(response.report.clone());
                 self.feedback.push(response.report);
                 self.unblock_used = false;
                 if stage.reviewer.is_empty() {
@@ -280,6 +291,7 @@ impl State {
                     }
                     "changes_required" => {
                         self.candidate_route = None;
+                        self.candidate_report = None;
                         self.review_cycles += 1;
                         if self.review_cycles >= stage.max_review_cycles {
                             self.stop_reason = Some("review cycle limit reached".into());
@@ -433,6 +445,12 @@ impl State {
             reviewed_commit: self.accepted_commit.clone(),
             review_action: review_action.to_owned(),
             selected_route: route.map(str::to_owned),
+            report: self.candidate_report.take(),
+            review_report: if self.gate == Gate::Reviewer {
+                self.feedback.last().cloned()
+            } else {
+                None
+            },
         });
         if next == "complete" {
             self.status = Status::Complete;

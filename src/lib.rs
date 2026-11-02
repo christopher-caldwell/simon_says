@@ -61,6 +61,7 @@ pub struct Stage {
     /// Reviewed inputs that this stage must not change, relative to its starting checkpoint.
     #[serde(default)]
     pub protected_inputs: Vec<String>,
+    #[serde(default)]
     pub outputs: Vec<String>,
     pub output_schema: Option<String>,
     pub on_pass: String,
@@ -410,10 +411,6 @@ impl Workflow {
                     "stage {name}: max_review_cycles must be 1..=100"
                 );
             }
-            ensure!(
-                !stage.outputs.is_empty(),
-                "stage {name}: at least one output is required"
-            );
             for p in stage.inputs.iter().chain(stage.outputs.iter()) {
                 validate_relative_path(p).with_context(|| format!("stage {name}"))?;
             }

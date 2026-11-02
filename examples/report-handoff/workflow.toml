@@ -1,0 +1,29 @@
+schema_version = 1
+name = "simple-report-handoff"
+start = "observe"
+max_stage_transitions = 3
+[roles.observer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+profile = "observer.md"
+timeout_seconds = 300
+[roles.fixer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+profile = "fixer.md"
+timeout_seconds = 300
+[stages.observe]
+worker = "observer"
+instructions = "instructions.md"
+on_pass = "complete"
+[stages.observe.routes]
+issue = "fix"
+clean = "complete"
+[stages.fix]
+worker = "fixer"
+instructions = "instructions.md"
+on_pass = "complete"

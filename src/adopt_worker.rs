@@ -175,6 +175,9 @@ pub fn adopt(
     let mut expected_packet = json!({"schema_version":1, "run_id":record.run_id, "action_id":expected_action, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":Gate::Worker, "role":stage.worker, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "protected_inputs":stage.protected_inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":null, "last_transition":record.state.last_transition, "review_worktree":null});
     if stage.reviewer.is_empty() {
         expected_packet["direct_handoff"] = json!(true);
+        if stage.outputs.is_empty() {
+            expected_packet["report_only"] = json!(true);
+        }
     }
     if stage.worker_selects_route() {
         expected_packet["worker_routes"] = json!(stage.routes.keys().collect::<Vec<_>>());
@@ -240,12 +243,16 @@ pub fn adopt(
         );
     }
     provider::validate_recorded_outcome(&plan, &stdout, &outcome)?;
-    let response: Response = serde_json::from_str(
+    let mut response: Response = serde_json::from_str(
         outcome
             .response
             .as_deref()
             .context("Worker response missing")?,
     )?;
+    if stage.reviewer.is_empty() && stage.outputs.is_empty() && response.candidate_commit.is_none()
+    {
+        response.candidate_commit = Some(worktree.head()?);
+    }
     ensure!(
         response.action_id == expected_action
             && response.outcome == "complete"

@@ -6,6 +6,7 @@ The [observed autonomy gaps](autonomy-gaps.md) document controller and workflow 
 
 ## Implemented
 
+- Direct stages can pass reports to the next role without creating output files or Git commits when the checkout is clean. The next packet contains `last_transition.report`; structured reports are JSON text. Reviewed stages pass the accepted Worker report.
 - Direct role-to-role stages may omit Reviewer and Unblocker; the Worker selects declared routes and validated checkpoints advance directly. A blocked action without an Unblocker stops. Independent review remains available where configured.
 - Strict versioned TOML loading, named pass routes and optional bounded Worker- or Reviewer-selected routes, reference and path checks, frozen instructions/profiles/schemas and explicitly declared project authority files, and draft-07 JSON Schema compilation and artifact validation. Per-stage `protected_inputs` can pin previously reviewed artifacts against each stage's starting checkpoint.
 - A locked durable JSON run record and per-action packet, exact invocation, transport logs, result/failure; `preparing` is persisted before action-specific Git checks and checkout, and `running` before action invocation. Interrupted or failed actions require explicit reset rather than automatic replay.

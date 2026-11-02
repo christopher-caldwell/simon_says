@@ -1,0 +1,1 @@
+Read the preceding role's report from last_transition in your action packet. The report describes an intentionally failing fixture, not a real system. In your own report identify the exact error text and exit code and say that the report was received. Do not write any files or make a commit.

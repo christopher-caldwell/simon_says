@@ -48,6 +48,41 @@ fn pass_and_correction_route_to_same_stage_and_preserve_feedback() {
     act(&mut s, &w, "pass", None, Some("c3"));
     assert_eq!(s.status, Status::Complete);
 }
+
+#[test]
+fn handoff_uses_the_accepted_workers_report_not_old_feedback_or_review() {
+    let (w, mut s) = setup();
+    for (action, outcome, report, candidate, inspected) in [
+        ("worker-1", "complete", "old result", Some("c1"), None),
+        (
+            "review-1",
+            "changes_required",
+            "please fix",
+            None,
+            Some("c1"),
+        ),
+        ("worker-2", "complete", "corrected result", Some("c2"), None),
+        ("review-2", "pass", "review passed", None, Some("c2")),
+    ] {
+        s.start(action.into()).unwrap();
+        s.apply(
+            &w,
+            Response {
+                action_id: action.into(),
+                outcome: outcome.into(),
+                report: report.into(),
+                candidate_commit: candidate.map(str::to_string),
+                inspected_commit: inspected.map(str::to_string),
+                route: None,
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        s.last_transition.unwrap().report.as_deref(),
+        Some("corrected result")
+    );
+}
 #[test]
 fn bounded_unblock_retries_origin_and_stops_on_second_block() {
     let (w, mut s) = setup();

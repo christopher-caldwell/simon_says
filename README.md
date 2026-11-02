@@ -2,7 +2,7 @@
 
 Simon Says is an early local, sequential workflow runner. A TOML definition assigns named roles to stages; the Rust controller validates and snapshots the definition, launches roles, checks their Git checkpoints and declared artifacts, and follows authored, bounded transitions. Reviewers and Unblockers are optional per stage. Authors define their own named role profiles; the controller does not contain a domain-specific Fixer. This is **not yet an accepted v0 release**: see [implementation status](docs/implementation/status.md) for evidence and open reliability limitations.
 
-Its core jobs are to read the workflow, launch its configured roles, pass their outputs between stages, follow the workflow's declared routes, and preserve run state. A model or tool performs the work defined by its role; Simon does not decide domain-specific answers.
+Its core jobs are to read the workflow, launch its configured roles, pass their reports and declared files between stages, follow the workflow's declared routes, and preserve run state. A model or tool performs the work defined by its role; Simon does not decide domain-specific answers.
 
 ```sh
 cargo test
@@ -23,6 +23,6 @@ cargo run -- resume /path/to/run
 
 Reset verifies the recorded worktree and checkpoint, discards tracked changes only there, and refuses untracked or ignored files. It never runs `git clean`. Git reset does not undo network calls, database writes, or other external effects. A correction-limit reset requeues the Worker and starts a new bounded correction attempt. Reset cannot extend an exhausted workflow transition limit. For interrupted initialization, `recover-init <run-dir>` resumes a recorded reservation. If checkout creation may have started, it requires `--acknowledge-external-effects` and an explicit choice: `--adopt-existing` for a verified checkout or `--retry-create` when the target is absent and unregistered. It refuses unidentifiable targets and never deletes them. Older run records without filesystem ownership identities require manual reconciliation for checkout operations. Clean review worktrees from a completed run can be removed with `cleanup-reviews <run-dir> --acknowledge-processes-exited`; action evidence and the Worker checkout are retained.
 
-Start with the [three-model CSV workflow](examples/csv-questions/README.md) or the [model-dispatched repair loop](examples/model-dispatch/README.md). The [authoring guide](docs/implementation/authoring-guide.md) describes optional review, recovery and other examples. Neither a fixture nor schema validation proves domain correctness.
+Start with the [direct report handoff](examples/report-handoff/README.md), [three-model CSV workflow](examples/csv-questions/README.md), or [model-dispatched repair loop](examples/model-dispatch/README.md). The [authoring guide](docs/implementation/authoring-guide.md) describes optional review, recovery and other examples. Neither a fixture nor schema validation proves domain correctness.
 
 **Execution:** Simon Says launches actions with the invoking user’s permissions and does not sandbox them. Provider-native settings remain configurable. The controller validates frozen authority, candidate commits and declared artifacts when actions return; those checks are not a security boundary against hostile processes.
