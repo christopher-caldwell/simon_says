@@ -5,7 +5,7 @@ This example shows the four roles from a Magic study:
 1. The Investigator prepares the deck inputs, pod, game counts, and runnable configurations.
 2. The Supervisor runs those configurations, watches the simulations, and records issues.
 3. The Fixer repairs issues from the run when the Supervisor selects `fix`.
-4. The Analyzer answers the original question after the Supervisor, or after the Fixer.
+4. The Analyzer answers the original question after the Supervisor, or after the Fixer. Once it has a satisfactory result, it preserves a durable summary and retires that study’s raw bulk data.
 
 The profiles say what each model should do. The TOML file says which role runs at each stage, which files pass between stages, and which routes Simon may follow. Simon does not need Magic rules in its code.
 
@@ -20,6 +20,8 @@ simon-says validate simon-example/workflow.toml
 simon-says run simon-example/workflow.toml --project . --run-dir /absolute/path/to/a/new-run --context study/question.md
 simon-says status /absolute/path/to/a/new-run
 ```
+
+The Analyzer needs the project’s actual finalization and cleanup procedure. Adapt its profile to the project before running. It must retain raw data when the result is not satisfactory, the evidence is still needed, or the cleanup scope cannot be verified.
 
 The template and profile paths are relative to `workflow.toml`. The `study/...` inputs and outputs are relative to the project root. The model must create the three configuration files in the Investigator stage; Simon checks they exist before dispatching the Supervisor. The example does not dictate the simulator's config schema, because that belongs to the Magic project.
 
