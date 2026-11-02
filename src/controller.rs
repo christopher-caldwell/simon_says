@@ -413,13 +413,89 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             "action {action_id} failed with exit {:?}; reset required",
             outcome.exit_code
         );
-        let mut response: Response = serde_json::from_str(
-            outcome
+        let original = outcome
+            .response
+            .as_deref()
+            .context("provider returned no response")?;
+        let parsed = serde_json::from_str::<Response>(original);
+        let missing_route = parsed.as_ref().is_ok_and(|response| {
+            gate == Gate::Worker
+                && stage.worker_selects_route()
+                && response.action_id == action_id
+                && response.outcome == "complete"
+                && !response.report.trim().is_empty()
+                && response.route.is_none()
+        });
+        let malformed_json = serde_json::from_str::<serde_json::Value>(original).is_err();
+        let needs_correction =
+            role.kind == "agent" && gate == Gate::Worker && (malformed_json || missing_route);
+        let mut response: Response = if needs_correction {
+            // One formatting-only invocation, recorded under the original action.
+            // It is never used for failed providers, invalid routes or replay.
+            let correction_prompt = if missing_route {
+                let report = &parsed.as_ref().unwrap().report;
+                let labels: Vec<_> = stage.routes.keys().collect();
+                format!("Your completed action omitted the required top-level route. Return only a JSON object with one field named route, containing your intended choice from the allowed labels. Follow your original report; never invent a decision. If it does not state a choice, return {{\"route\":null}}. Do not use tools, change files, or repeat any work. Allowed labels: {}. Original report: {}", serde_json::to_string(&labels)?, serde_json::to_string(report)?)
+            } else {
+                format!("Your completed action did not return the required JSON response. Reformat your original response as one JSON object with action_id, outcome, report, and any applicable route, candidate_commit, and inspected_commit fields. Preserve the original meaning and action identity; do not invent a decision. Do not use tools, change files, or repeat any work. Original response: {}", serde_json::to_string(original)?)
+            };
+            let correction_dir = dir.join("format-correction");
+            fs::create_dir(&correction_dir)?;
+            let mut correction_plan =
+                provider::prepare(role, gate, &correction_prompt, cwd, &packet_path)?;
+            correction_plan.scratch = plan.scratch.clone();
+            correction_plan.env = plan.env.clone();
+            write_result(&correction_dir.join("invocation.json"), &correction_plan)?;
+            fs::File::open(&correction_dir)?.sync_all()?;
+            fs::File::open(&dir)?.sync_all()?;
+            record.state.stop_reason = Some("response format correction in progress".into());
+            store.save(&record)?;
+            let corrected = provider::invoke(&correction_plan, &correction_dir)?;
+            let observed = store.load();
+            let authority_matches = observed.as_ref().is_ok_and(|(saved, frozen)| {
+                serde_json::to_value(saved).ok() == serde_json::to_value(&record).ok()
+                    && serde_json::to_value(frozen).ok() == serde_json::to_value(&snapshot).ok()
+            });
+            if !authority_matches {
+                store
+                    .restore_trusted(&record, &snapshot)
+                    .context("could not restore trusted running state")?;
+                anyhow::bail!("run authority changed during response correction; restored uncertain running state; reset required");
+            }
+            write_result(&correction_dir.join("outcome.json"), &corrected)?;
+            ensure!(
+                corrected.success,
+                "response format correction failed; reset required"
+            );
+            let text = corrected
                 .response
                 .as_deref()
-                .context("provider returned no response")?,
-        )
-        .context("invalid action response; reset required")?;
+                .context("response format correction returned no response")?;
+            let corrected_response = if missing_route {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct RouteCorrection {
+                    route: String,
+                }
+                let route: RouteCorrection = serde_json::from_str(text)
+                    .context("invalid response format correction; reset required")?;
+                ensure!(
+                    stage.routes.contains_key(&route.route),
+                    "response format correction selected an undeclared route; reset required"
+                );
+                let mut original_response = parsed.expect("parsed response was checked");
+                original_response.route = Some(route.route);
+                original_response
+            } else {
+                serde_json::from_str(text)
+                    .context("invalid response format correction; reset required")?
+            };
+            record.state.stop_reason = None;
+            store.save(&record)?;
+            corrected_response
+        } else {
+            parsed.context("invalid action response; reset required")?
+        };
         if gate == Gate::Worker
             && response.outcome == "complete"
             && response.candidate_commit.is_none()
