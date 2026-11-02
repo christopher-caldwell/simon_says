@@ -38,9 +38,10 @@ handoffs in the study workflow.
 ## Framework questions and remaining verification
 
 The controller currently supports named workflow roles, stage transitions,
-reviewer-selected declared routes, and bounded Worker/Reviewer/Unblocker
-handling. Currently only a passing Reviewer can select a declared route; a
-Worker or Unblocker cannot select one directly. Its Unblocker runs with
+declared routes, and bounded Worker/Reviewer/Unblocker
+handling. A stage can let either its Worker or its passing Reviewer select a declared
+route; an Unblocker cannot select one directly. A Worker-selected route still
+requires review of the candidate. Its Unblocker runs with
 read-only intent and cannot commit a repair. These are current implementation
 constraints, not requirements that every workflow have a supervisor. Whether the existing stage and route mechanisms can express the complete Magic
 supervisor → fixer → supervisor → retry cycle with the necessary context must be

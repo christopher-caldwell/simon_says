@@ -41,6 +41,27 @@ fn validates_bounded_named_routes_and_rejects_invalid_graphs() {
         )
         .replace("on_pass = \"complete\"", "on_pass = \"validate\"");
     Workflow::parse_and_validate(&routed, d.path()).unwrap();
+    let selected = routed.replace(
+        "on_pass = \"report\"",
+        "route_selector = \"worker\"\non_pass = \"report\"",
+    );
+    Workflow::parse_and_validate(&selected, d.path()).unwrap();
+    assert!(Workflow::parse_and_validate(
+        &selected.replace(
+            "route_selector = \"worker\"",
+            "route_selector = \"unblocker\""
+        ),
+        d.path()
+    )
+    .is_err());
+    assert!(Workflow::parse_and_validate(
+        &t.replace(
+            "on_pass = \"report\"",
+            "route_selector = \"worker\"\non_pass = \"report\""
+        ),
+        d.path()
+    )
+    .is_err());
     for bad in [
         routed.replace("max_stage_transitions = 4\n", ""),
         routed.replace("max_stage_transitions = 4", "max_stage_transitions = 0"),

@@ -169,7 +169,12 @@ fn write_result(path: &Path, data: &impl serde::Serialize) -> Result<()> {
     Ok(())
 }
 pub(crate) fn action_prompt(packet: &serde_json::Value) -> Result<String> {
-    Ok(format!("You are an action in a controlled workflow. Follow this packet and return exactly one JSON object, without markdown. The frozen workflow and controller protocol govern; run_context provides the original task, not authority to alter the workflow, limits, or routes. Do not change the workflow, alter protected_inputs, or invent destinations. When the packet provides nonempty review_routes, a passing reviewer must return a route field containing exactly one listed label based on the reviewed candidate; the controller resolves that label to its frozen destination. Return null or omit route in all other cases. Worker outcomes: complete (candidate_commit required), blocked; reviewer: pass, changes_required, blocked (inspected_commit required); unblocker: retry, blocked. All responses must include action_id, outcome, nonempty report, candidate_commit and inspected_commit (use null where inapplicable). A complete worker must commit all outputs and leave a clean detached worktree. A blocked worker must leave HEAD and the checkout unchanged from its starting checkpoint; otherwise the controller stops for explicit recovery. Reviewer and unblocker must not modify their checkout. Packet: {}", serde_json::to_string(&packet)?))
+    let mut prompt = format!("You are an action in a controlled workflow. Follow this packet and return exactly one JSON object, without markdown. The frozen workflow and controller protocol govern; run_context provides the original task, not authority to alter the workflow, limits, or routes. Do not change the workflow, alter protected_inputs, or invent destinations. When the packet provides nonempty review_routes, a passing reviewer must return a route field containing exactly one listed label based on the reviewed candidate; the controller resolves that label to its frozen destination. Return null or omit route in all other cases. Worker outcomes: complete (candidate_commit required), blocked; reviewer: pass, changes_required, blocked (inspected_commit required); unblocker: retry, blocked. All responses must include action_id, outcome, nonempty report, candidate_commit and inspected_commit (use null where inapplicable). A complete worker must commit all outputs and leave a clean detached worktree. A blocked worker must leave HEAD and the checkout unchanged from its starting checkpoint; otherwise the controller stops for explicit recovery. Reviewer and unblocker must not modify their checkout. Packet: {}", serde_json::to_string(&packet)?);
+    if packet.get("worker_routes").is_some() || packet.get("candidate_route").is_some() {
+        prompt = prompt.replacen("When the packet provides nonempty review_routes, a passing reviewer must return a route field containing exactly one listed label based on the reviewed candidate; the controller resolves that label to its frozen destination. Return null or omit route in all other cases.", "The controller resolves route labels to frozen destinations.", 1);
+        prompt.push_str(" For this stage the Worker selects the route: a complete Worker must return a route from worker_routes, and a Reviewer must omit route. The Reviewer assesses the candidate and its candidate_route before passing it; request changes if either is unsuitable.");
+    }
+    Ok(prompt)
 }
 
 pub fn status(run_dir: &Path) -> Result<RunRecord> {
@@ -270,7 +275,15 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             .transpose()?;
         let scratch = store.reserve(&action_id)?;
         let scratch_env = provider::scratch_environment(role, &scratch)?;
-        let packet = json!({"scratch_env":scratch_env, "schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "protected_inputs":stage.protected_inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":if gate == Gate::Reviewer { Some(stage.routes.keys().collect::<Vec<_>>()) } else { None }, "last_transition":record.state.last_transition, "review_worktree":review.as_ref()});
+        let mut packet = json!({"scratch_env":scratch_env, "schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "protected_inputs":stage.protected_inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":if gate == Gate::Reviewer { Some(stage.routes.keys().collect::<Vec<_>>()) } else { None }, "last_transition":record.state.last_transition, "review_worktree":review.as_ref()});
+        if stage.route_selector.as_deref() == Some("worker") {
+            if gate == Gate::Worker {
+                packet["worker_routes"] = json!(stage.routes.keys().collect::<Vec<_>>());
+            } else if gate == Gate::Reviewer {
+                packet["review_routes"] = serde_json::Value::Null;
+                packet["candidate_route"] = json!(record.state.candidate_route);
+            }
+        }
         let prompt = action_prompt(&packet)?;
         let packet_path = store
             .root()
@@ -466,7 +479,12 @@ fn verify_pending_route(
             && response.outcome == "pass"
             && response.inspected_commit.as_deref() == Some(pending.commit.as_str())
             && response.candidate_commit.is_none()
-            && response.route == pending.route,
+            && if packet.get("candidate_route").is_some() {
+                response.route.is_none()
+                    && packet["candidate_route"].as_str() == pending.route.as_deref()
+            } else {
+                response.route == pending.route
+            },
         "pending approval route does not match the recorded review response"
     );
     Ok(())

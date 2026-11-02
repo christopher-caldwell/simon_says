@@ -37,7 +37,7 @@ fn success(out: &Output) {
 fn json(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
-fn setup() -> (tempfile::TempDir, PathBuf) {
+fn setup(worker_route: bool) -> (tempfile::TempDir, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
     fs::create_dir(&repo).unwrap();
@@ -53,7 +53,24 @@ fn setup() -> (tempfile::TempDir, PathBuf) {
         "approval_required = true\non_pass = \"complete\"",
         1,
     );
+    let text = if worker_route {
+        text.replacen(
+            "[stages.simulate.routes]",
+            "route_selector = \"worker\"\n[stages.simulate.routes]",
+            1,
+        )
+    } else {
+        text
+    };
     fs::write(file, text).unwrap();
+    if worker_route {
+        let action_path = repo.join("action.py");
+        let action = fs::read_to_string(&action_path).unwrap().replace(
+            "candidate=candidate)\n    if gate == \"worker\" and stage == \"repair\"",
+            "candidate=candidate, route=\"issues\" if result[\"issue\"] else \"clean\")\n    if gate == \"worker\" and stage == \"repair\"").replace(
+            "route=route)\n        if stage == \"repair\"", "route=None)\n        if stage == \"repair\"");
+        fs::write(action_path, action).unwrap();
+    }
     git(&repo, &["init", "-q"]);
     git(&repo, &["config", "user.name", "Fixture"]);
     git(&repo, &["config", "user.email", "fixture@example.invalid"]);
@@ -91,7 +108,7 @@ fn approve(run: &Path, state: &Value) -> Output {
 
 #[test]
 fn approved_route_dispatches_reviewed_repair_after_a_fresh_process() {
-    let (_temp, run) = setup();
+    let (_temp, run) = setup(false);
     let before = json(&run.join("state.json"));
     success(&approve(&run, &before));
     let packet = json(&run.join("actions/action-2/packet.json"));
@@ -106,7 +123,7 @@ fn approved_route_dispatches_reviewed_repair_after_a_fresh_process() {
 
 #[test]
 fn changing_pending_route_to_a_different_valid_route_does_not_authorize_it() {
-    let (_temp, run) = setup();
+    let (_temp, run) = setup(false);
     let path = run.join("state.json");
     let mut record = json(&path);
     record["state"]["pending_approval"]["route"] = Value::String("clean".into());
@@ -128,7 +145,7 @@ fn changing_pending_route_to_a_different_valid_route_does_not_authorize_it() {
 
 #[test]
 fn changed_review_action_response_does_not_match_pending_route() {
-    let (_temp, run) = setup();
+    let (_temp, run) = setup(false);
     let state = json(&run.join("state.json"));
     let path = run.join("actions/action-1/outcome.json");
     let mut outcome = json(&path);
@@ -145,7 +162,7 @@ fn changed_review_action_response_does_not_match_pending_route() {
 #[test]
 fn symlinked_review_record_is_rejected_without_approval() {
     use std::os::unix::fs::symlink;
-    let (_temp, run) = setup();
+    let (_temp, run) = setup(false);
     let state = json(&run.join("state.json"));
     let path = run.join("actions/action-1/outcome.json");
     let moved = run.join("saved-outcome.json");
@@ -159,7 +176,7 @@ fn symlinked_review_record_is_rejected_without_approval() {
 
 #[test]
 fn traversal_review_identity_is_rejected_before_filesystem_access() {
-    let (_temp, run) = setup();
+    let (_temp, run) = setup(false);
     let path = run.join("state.json");
     let mut state = json(&path);
     state["state"]["pending_approval"]["review_action"] = Value::String("../../unexpected".into());
@@ -173,7 +190,7 @@ fn traversal_review_identity_is_rejected_before_filesystem_access() {
 #[test]
 fn symlinked_actions_parent_is_rejected() {
     use std::os::unix::fs::symlink;
-    let (_temp, run) = setup();
+    let (_temp, run) = setup(false);
     let state = json(&run.join("state.json"));
     fs::rename(run.join("actions"), run.join("saved-actions")).unwrap();
     symlink(run.join("saved-actions"), run.join("actions")).unwrap();
@@ -186,7 +203,7 @@ fn symlinked_actions_parent_is_rejected() {
 #[test]
 fn review_packet_from_different_run_or_snapshot_is_rejected() {
     for field in ["run_id", "template_digest"] {
-        let (_temp, run) = setup();
+        let (_temp, run) = setup(false);
         let state = json(&run.join("state.json"));
         let path = run.join("actions/action-1/packet.json");
         let mut packet = json(&path);
@@ -200,4 +217,14 @@ fn review_packet_from_different_run_or_snapshot_is_rejected() {
         assert_eq!(fs::read(run.join("state.json")).unwrap(), before);
         assert!(!run.join("actions/action-2").exists());
     }
+}
+
+#[test]
+fn approval_preserves_worker_selected_route() {
+    let (_temp, run) = setup(true);
+    let before = json(&run.join("state.json"));
+    success(&approve(&run, &before));
+    let packet = json(&run.join("actions/action-2/packet.json"));
+    assert_eq!(packet["role"], "repair_specialist");
+    assert_eq!(packet["last_transition"]["selected_route"], "issues");
 }

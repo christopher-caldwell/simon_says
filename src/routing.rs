@@ -31,7 +31,7 @@ pub struct Response {
     pub report: String,
     pub candidate_commit: Option<String>,
     pub inspected_commit: Option<String>,
-    /// A declared route label, selected only by a passing Reviewer.
+    /// A declared route label, selected by the configured gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
 }
@@ -73,6 +73,9 @@ pub struct State {
     pub action_id: Option<String>,
     pub accepted_commit: String,
     pub candidate_commit: Option<String>,
+    /// Route proposed by the Worker for the current candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_route: Option<String>,
     pub feedback: Vec<String>,
     pub review_cycles: u32,
     pub unblock_origin: Option<Gate>,
@@ -97,6 +100,7 @@ impl State {
             action_id: None,
             accepted_commit: baseline,
             candidate_commit: None,
+            candidate_route: None,
             feedback: vec![],
             review_cycles: 0,
             unblock_origin: None,
@@ -136,33 +140,54 @@ impl State {
             .stages
             .get(&self.stage)
             .ok_or_else(|| anyhow::anyhow!("unknown current stage"))?;
-        let destination = if self.gate == Gate::Reviewer && response.outcome == "pass" {
-            if stage.routes.is_empty() {
-                ensure!(
-                    response.route.is_none(),
-                    "route is not declared for this stage"
-                );
-                Some(stage.on_pass.clone())
-            } else {
-                let route = response
+        let worker_selects = stage.route_selector.as_deref() == Some("worker");
+        let destination =
+            if self.gate == Gate::Worker && response.outcome == "complete" && worker_selects {
+                let label = response
                     .route
                     .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("reviewer pass requires a declared route"))?;
-                Some(
-                    stage
-                        .routes
-                        .get(route)
-                        .ok_or_else(|| anyhow::anyhow!("unknown reviewer route {route:?}"))?
-                        .clone(),
-                )
-            }
-        } else {
-            ensure!(
-                response.route.is_none(),
-                "only a passing reviewer may select a route"
-            );
-            None
-        };
+                    .ok_or_else(|| anyhow::anyhow!("worker complete requires a declared route"))?;
+                ensure!(
+                    stage.routes.contains_key(label),
+                    "unknown worker route {label:?}"
+                );
+                None
+            } else if self.gate == Gate::Reviewer && response.outcome == "pass" {
+                if stage.routes.is_empty() {
+                    ensure!(
+                        response.route.is_none(),
+                        "route is not declared for this stage"
+                    );
+                    Some(stage.on_pass.clone())
+                } else {
+                    let label = if worker_selects {
+                        ensure!(
+                            response.route.is_none(),
+                            "reviewer cannot select a worker route"
+                        );
+                        self.candidate_route
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("candidate route missing"))?
+                    } else {
+                        response.route.as_ref().ok_or_else(|| {
+                            anyhow::anyhow!("reviewer pass requires a declared route")
+                        })?
+                    };
+                    Some(
+                        stage
+                            .routes
+                            .get(label)
+                            .ok_or_else(|| anyhow::anyhow!("unknown route {label:?}"))?
+                            .clone(),
+                    )
+                }
+            } else {
+                ensure!(
+                    response.route.is_none(),
+                    "route is not allowed for this action"
+                );
+                None
+            };
         match (self.gate, response.outcome.as_str()) {
             (Gate::Worker, "complete") => {
                 let commit = response
@@ -175,6 +200,7 @@ impl State {
                     "worker cannot report inspected commit"
                 );
                 self.candidate_commit = Some(commit.to_owned());
+                self.candidate_route = response.route.clone();
                 self.feedback.push(response.report);
                 self.gate = Gate::Reviewer;
                 self.unblock_used = false;
@@ -192,6 +218,11 @@ impl State {
                 self.feedback.push(response.report);
                 match response.outcome.as_str() {
                     "pass" => {
+                        let selected_route = if worker_selects {
+                            self.candidate_route.take()
+                        } else {
+                            response.route.clone()
+                        };
                         self.accepted_commit = self.candidate_commit.take().unwrap();
                         let next = destination.as_deref().unwrap();
                         // Do not ask for approval if no authorized transition
@@ -205,7 +236,7 @@ impl State {
                                 stage: self.stage.clone(),
                                 review_action: response.action_id.clone(),
                                 commit: self.accepted_commit.clone(),
-                                route: response.route.clone(),
+                                route: selected_route.clone(),
                             });
                             self.status = Status::AwaitingApproval;
                         } else {
@@ -213,11 +244,12 @@ impl State {
                                 workflow,
                                 next,
                                 &response.action_id,
-                                response.route.as_deref(),
+                                selected_route.as_deref(),
                             );
                         }
                     }
                     "changes_required" => {
+                        self.candidate_route = None;
                         self.review_cycles += 1;
                         if self.review_cycles >= stage.max_review_cycles {
                             self.stop_reason = Some("review cycle limit reached".into());

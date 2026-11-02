@@ -155,6 +155,9 @@ pub fn adopt(
         .map(|p| snapshot.files.get(p).context("frozen profile missing"))
         .transpose()?;
     let mut expected_packet = json!({"schema_version":1, "run_id":record.run_id, "action_id":expected_action, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":Gate::Worker, "role":stage.worker, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "protected_inputs":stage.protected_inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":null, "last_transition":record.state.last_transition, "review_worktree":null});
+    if stage.route_selector.as_deref() == Some("worker") {
+        expected_packet["worker_routes"] = json!(stage.routes.keys().collect::<Vec<_>>());
+    }
     if packet.get("scratch_env").is_some() {
         expected_packet["scratch_env"] = serde_json::to_value(&env)?;
     } else {

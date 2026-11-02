@@ -62,9 +62,12 @@ pub struct Stage {
     pub outputs: Vec<String>,
     pub output_schema: Option<String>,
     pub on_pass: String,
-    /// Reviewer-selected labels mapped to frozen, permitted destinations.
+    /// Labels mapped to frozen, permitted destinations.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub routes: BTreeMap<String, String>,
+    /// Select routes from the Worker response instead of the Reviewer response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_selector: Option<String>,
     /// Stop after review until the accepted checkpoint is explicitly approved.
     #[serde(default)]
     pub approval_required: bool,
@@ -341,6 +344,16 @@ impl Workflow {
                 "stage {name}: unknown transition {}",
                 stage.on_pass
             );
+            if let Some(selector) = &stage.route_selector {
+                ensure!(
+                    selector == "worker" || selector == "reviewer",
+                    "stage {name}: route_selector must be worker or reviewer"
+                );
+                ensure!(
+                    !stage.routes.is_empty(),
+                    "stage {name}: route_selector requires routes"
+                );
+            }
             if !stage.routes.is_empty() {
                 ensure!(
                     w.max_stage_transitions.is_some(),

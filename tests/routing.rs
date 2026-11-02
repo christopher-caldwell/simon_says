@@ -325,3 +325,92 @@ fn worker_and_nonpass_reviewer_cannot_select_route() {
         )
         .is_err());
 }
+
+#[test]
+fn worker_selected_route_is_bound_to_reviewed_candidate_and_survives_restart() {
+    let (mut w, mut s) = dynamic();
+    w.stages.get_mut("validate").unwrap().route_selector = Some("worker".into());
+    s.start("worker".into()).unwrap();
+    let mut response = Response {
+        action_id: "worker".into(),
+        outcome: "complete".into(),
+        report: "issue".into(),
+        candidate_commit: Some("candidate".into()),
+        inspected_commit: None,
+        route: None,
+    };
+    assert!(s.apply(&w, response.clone()).is_err());
+    response.route = Some("unapproved".into());
+    assert!(s.apply(&w, response.clone()).is_err());
+    response.route = Some("issues".into());
+    s.apply(&w, response).unwrap();
+    s = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+    assert_eq!(s.candidate_route.as_deref(), Some("issues"));
+    s.start("review".into()).unwrap();
+    let mut review = Response {
+        action_id: "review".into(),
+        outcome: "pass".into(),
+        report: "reviewed".into(),
+        candidate_commit: None,
+        inspected_commit: Some("wrong".into()),
+        route: None,
+    };
+    assert!(s.apply(&w, review.clone()).is_err());
+    review.inspected_commit = Some("candidate".into());
+    review.route = Some("clean".into());
+    assert!(s.apply(&w, review.clone()).is_err());
+    review.route = None;
+    s.apply(&w, review).unwrap();
+    assert_eq!(s.stage, "report");
+    assert_eq!(
+        s.last_transition.unwrap().selected_route.as_deref(),
+        Some("issues")
+    );
+}
+
+#[test]
+fn rejected_candidate_cannot_reuse_its_route() {
+    let (mut w, mut s) = dynamic();
+    w.stages.get_mut("validate").unwrap().route_selector = Some("worker".into());
+    s.start("worker".into()).unwrap();
+    s.apply(
+        &w,
+        Response {
+            action_id: "worker".into(),
+            outcome: "complete".into(),
+            report: "issue".into(),
+            candidate_commit: Some("c1".into()),
+            inspected_commit: None,
+            route: Some("issues".into()),
+        },
+    )
+    .unwrap();
+    s.start("review".into()).unwrap();
+    s.apply(
+        &w,
+        Response {
+            action_id: "review".into(),
+            outcome: "changes_required".into(),
+            report: "revise".into(),
+            candidate_commit: None,
+            inspected_commit: Some("c1".into()),
+            route: None,
+        },
+    )
+    .unwrap();
+    assert!(s.candidate_route.is_none());
+    s.start("correct".into()).unwrap();
+    assert!(s
+        .apply(
+            &w,
+            Response {
+                action_id: "correct".into(),
+                outcome: "complete".into(),
+                report: "fixed".into(),
+                candidate_commit: Some("c2".into()),
+                inspected_commit: None,
+                route: None
+            }
+        )
+        .is_err());
+}

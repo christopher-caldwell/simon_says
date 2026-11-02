@@ -257,3 +257,39 @@ fn ignored_worker_file_prevents_review_and_is_not_deleted_by_reset() {
     assert_eq!(fs::read_to_string(&ignored).unwrap(), "unreviewed content");
     assert!(!repo.join("ignored-helper.tmp").exists());
 }
+
+#[test]
+fn worker_can_choose_repair_then_rerun_through_the_cli() {
+    let (_temp, repo, run_dir) = fixture("repairable", false);
+    let workflow_path = repo.join("workflow.toml");
+    let workflow = fs::read_to_string(&workflow_path).unwrap().replacen(
+        "[stages.simulate.routes]",
+        "route_selector = \"worker\"\n[stages.simulate.routes]",
+        1,
+    );
+    fs::write(&workflow_path, workflow).unwrap();
+    let action_path = repo.join("action.py");
+    let action = fs::read_to_string(&action_path).unwrap().replace(
+        "candidate=candidate)\n    if gate == \"worker\" and stage == \"repair\"",
+        "candidate=candidate, route=\"issues\" if result[\"issue\"] else \"clean\")\n    if gate == \"worker\" and stage == \"repair\"").replace(
+        "route=route)\n        if stage == \"repair\"",
+        "route=None)\n        if stage == \"repair\"");
+    fs::write(&action_path, action).unwrap();
+    git(&repo, &["add", "workflow.toml", "action.py"]);
+    git(
+        &repo,
+        &["commit", "-qm", "Configure worker-directed routing"],
+    );
+    success(run(&repo, &run_dir));
+    assert_eq!(status(&run_dir)["state"]["status"], "complete");
+    assert_eq!(action_response(&run_dir, 0)["route"], "issues");
+    assert_eq!(
+        read(&run_dir.join("actions/action-1/packet.json"))["candidate_route"],
+        "issues"
+    );
+    assert_eq!(
+        read(&run_dir.join("actions/action-2/packet.json"))["role"],
+        "repair_specialist"
+    );
+    assert_eq!(action_response(&run_dir, 4)["route"], "clean");
+}
