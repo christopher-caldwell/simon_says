@@ -62,13 +62,13 @@ on_pass = "complete"
 max_review_cycles = 3
 ```
 
-This example assumes a command adapter that returns the standard action envelope and produces a Git commit; simple shell scripts may need a thin adapter script. The domain-specific scripts are existing user-owned tools, not engine code.
+This example assumes a command adapter that returns the standard action envelope; Simon can checkpoint the resulting work. Simple shell scripts may need a thin adapter script. The domain-specific scripts are existing user-owned tools, not engine code.
 
 ## Stage semantics
 
-V0 supports unique named stages and an explicit `on_pass` destination (another stage or reserved `complete`). A stage may also declare route labels mapped to destinations; a passing Reviewer selects a declared label by default, or the stage may set `route_selector = "worker"` for its Worker to select one subject to review. The controller resolves the reviewed label. Named routes or cycles require a finite `max_stage_transitions`. Built-in bounded `changes_required → same Worker` and `blocked → Unblocker → originating gate` routes remain separate. A stop is represented by durable run status, not a guessed route. Arbitrary condition expressions, nested graphs and parallel branches remain out of scope. See [ADR-0006](../decisions/0006-workflow-defined-role-routing.md).
+V0 supports unique named stages and an explicit `on_pass` destination (another stage or reserved `complete`). A stage may also declare route labels mapped to destinations. Without a Reviewer, the Worker selects a label. With a Reviewer, the Reviewer selects by default, or `route_selector = "worker"` lets the Worker select one subject to review. The controller resolves the declared label. Named routes or cycles require a finite `max_stage_transitions`. Built-in bounded `changes_required → same Worker` and `blocked → Unblocker → originating gate` routes remain separate. A stop is represented by durable run status, not a guessed route. Arbitrary condition expressions, nested graphs and parallel branches remain out of scope. See [ADR-0006](../decisions/0006-workflow-defined-role-routing.md).
 
-Reviewer defaults to an explicit named role. A deterministic verifier may replace the Reviewer when its exit/result protocol is documented; omitting a Reviewer without declaring a verifier is invalid. All stages have a mechanical output check whether or not they have an AI Reviewer.
+Reviewers and Unblockers are optional. A direct stage passes its result to the next configured role. When outputs or schemas are declared, the controller checks them; domain judgment belongs to the configured roles.
 
 The action protocol has three fixed gate types (`worker`, `reviewer`, `unblocker`); these are not a fixed catalog of domain roles. Each workflow defines its own named roles, profiles, models, and stage assignments. A named role such as a simulator, investigator, or fixer can be assigned to a stage, and declared routes determine which stage runs next.
 
@@ -81,7 +81,7 @@ Reject before launch:
 - Missing instructions, profiles, schema files, or declared starting inputs.
 - A reference escaping the workflow/template/run root, untrusted symlinks in authoritative paths, or absolute paths when the policy requires relative paths.
 - Unsupported provider/model/effort combination where the adapter can detect it; other provider failures are reported at invocation.
-- A stage without a Worker or without a review/verification gate.
+- A stage without a Worker, or a declared Reviewer or Unblocker that does not exist.
 - Missing limits or impossible bounds for retries/corrections.
 - An inconsistent or dirty source baseline as defined by [Git checkpoint rules](git-checkpoints.md).
 

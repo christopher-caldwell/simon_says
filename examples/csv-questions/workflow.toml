@@ -28,11 +28,6 @@ effort = "medium"
 profile = "analysis-profile.md"
 timeout_seconds = 300
 
-[roles.checker]
-kind = "command"
-argv = ["python3", "-B"]
-timeout_seconds = 30
-
 [stages.questions]
 worker = "question_writer"
 instructions = "instructions.md"

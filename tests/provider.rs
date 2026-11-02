@@ -576,14 +576,21 @@ fn codex_and_claude_plans_include_exact_model_and_effort() {
     let p = prepare(&r, Gate::Worker, "hello", dir.path(), &packet).unwrap();
     assert_eq!(p.program, "claude");
     assert!(p.argv.windows(2).any(|v| v == ["--effort", "high"]));
-    assert!(p
+    assert!(!p
         .argv
-        .windows(2)
-        .any(|v| v == ["--permission-mode", "acceptEdits"]));
+        .iter()
+        .any(|a| a == "--permission-mode" || a == "--settings"));
     assert_eq!(p.argv.last().unwrap(), "--");
     assert_eq!(p.stdin_prompt.as_deref(), Some("hello"));
     let review = prepare(&r, Gate::Reviewer, "hello", dir.path(), &packet).unwrap();
     assert!(!review.argv.iter().any(|a| a == "--permission-mode"));
+    r.args = vec!["--permission-mode".into(), "bypassPermissions".into()];
+    let explicit = prepare(&r, Gate::Worker, "hello", dir.path(), &packet).unwrap();
+    assert!(explicit
+        .argv
+        .windows(2)
+        .any(|v| v == ["--permission-mode", "bypassPermissions"]));
+    assert!(!explicit.argv.iter().any(|a| a == "--settings"));
 }
 #[test]
 fn native_owned_flags_and_bad_effort_are_rejected() {

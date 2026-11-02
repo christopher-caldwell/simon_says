@@ -182,6 +182,13 @@ pub fn adopt(
     if packet.get("controller_checkpoint").is_some() {
         expected_packet["controller_checkpoint"] = json!(true);
     }
+    if packet.get("prompt_revision").is_some() {
+        ensure!(
+            packet.get("controller_checkpoint").and_then(Value::as_bool) == Some(true),
+            "prompt revision requires controller checkpointing"
+        );
+        expected_packet["prompt_revision"] = json!(2);
+    }
     if stage.worker_selects_route() {
         expected_packet["worker_routes"] = json!(stage.routes.keys().collect::<Vec<_>>());
     }
@@ -216,8 +223,13 @@ pub fn adopt(
     }
     expected_plan.scratch = Some(scratch);
     expected_plan.env = env;
+    let plan_value = serde_json::to_value(&plan)?;
+    let current_matches = plan_value == serde_json::to_value(&expected_plan)?;
+    let legacy_matches = provider::legacy_claude_worker_plan(role, &expected_plan)
+        .map(|legacy| serde_json::to_value(legacy).is_ok_and(|value| value == plan_value))
+        .unwrap_or(false);
     ensure!(
-        serde_json::to_value(&plan)? == serde_json::to_value(&expected_plan)?,
+        current_matches || legacy_matches,
         "recorded invocation differs from frozen Worker plan"
     );
     let process: Value = read_json(&action.join("process.json"))?;
@@ -252,34 +264,56 @@ pub fn adopt(
             .as_deref()
             .context("Worker response missing")?,
     )?;
-    if response.candidate_commit.is_none()
-        && (packet.get("controller_checkpoint").and_then(Value::as_bool) == Some(true)
-            || (stage.reviewer.is_empty() && stage.outputs.is_empty()))
-    {
-        response.candidate_commit = Some(worktree.head()?);
-    }
     ensure!(
-        response.action_id == expected_action
-            && response.outcome == "complete"
-            && response.candidate_commit.as_deref() == Some(expected_candidate),
-        "response does not nominate expected Worker candidate"
+        response.action_id == expected_action && response.outcome == "complete",
+        "response does not identify the expected completed Worker"
     );
     let checkpoint = recovery_commit(&record.state).to_owned();
-    worktree.verify_candidate(expected_candidate, &checkpoint)?;
+    if response.candidate_commit.is_none()
+        && packet.get("controller_checkpoint").and_then(Value::as_bool) == Some(true)
+    {
+        ensure!(
+            worktree.head()? == expected_candidate,
+            "worktree HEAD does not match expected pre-checkpoint commit"
+        );
+        crate::controller::checkpoint_worker(
+            &record.state,
+            &workflow,
+            &worktree,
+            &checkpoint,
+            &mut response,
+        )?;
+    } else {
+        if response.candidate_commit.is_none()
+            && stage.reviewer.is_empty()
+            && stage.outputs.is_empty()
+        {
+            response.candidate_commit = Some(worktree.head()?);
+        }
+        ensure!(
+            response.candidate_commit.as_deref() == Some(expected_candidate),
+            "response does not nominate expected Worker candidate"
+        );
+    }
+    let candidate = response
+        .candidate_commit
+        .as_deref()
+        .context("candidate missing")?;
+    worktree.verify_candidate(candidate, &checkpoint)?;
     artifact::inputs(&worktree.path, &checkpoint, stage)?;
     artifact::frozen_paths(
         &worktree.path,
         &worktree.baseline,
-        expected_candidate,
+        candidate,
         &workflow.frozen_project_files,
     )?;
     artifact::frozen_paths(
         &worktree.path,
         &checkpoint,
-        expected_candidate,
+        candidate,
         &stage.protected_inputs,
     )?;
-    artifact::outputs(&worktree.path, expected_candidate, stage, &snapshot)?;
+    artifact::outputs(&worktree.path, candidate, stage, &snapshot)?;
     record.state.status = Status::Running;
     record.state.stop_reason = None;
     record.state.apply(&workflow, response)?;

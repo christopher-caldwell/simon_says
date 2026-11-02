@@ -179,6 +179,12 @@ pub(crate) fn action_prompt(packet: &serde_json::Value) -> Result<String> {
         } else {
             "Omit route."
         };
+        if packet.get("prompt_revision").and_then(|v| v.as_u64()) == Some(2) {
+            return Ok(format!(
+                "Perform your assigned role using the packet below. The prior role's result, if any, is in last_transition.report. Return one JSON object with action_id, outcome (complete or blocked), and a nonempty report. {route} Simon checkpoints your work. If blocked, leave the checkout unchanged; to hand off an expected problem with partial results, complete the role and select a declared route. Packet: {}",
+                serde_json::to_string(packet)?
+            ));
+        }
         return Ok(format!(
             "Perform your assigned role using the packet below. The prior role's result, if any, is in last_transition.report. Write any declared outputs. Return one JSON object with action_id, outcome (complete or blocked), and a nonempty report. {route} Simon checkpoints your changes; you do not need to commit. Leave any other new or ignored files outside the checkout. Packet: {}",
             serde_json::to_string(packet)?
@@ -207,6 +213,23 @@ pub(crate) fn action_prompt(packet: &serde_json::Value) -> Result<String> {
         prompt.push_str(" This stage has no reviewer. Simon advances after checking the completed output and checkpoint.");
     }
     Ok(prompt)
+}
+
+/// Validate the action before checkpointing; used for execution and explicit recovery.
+pub(crate) fn checkpoint_worker(
+    state: &crate::routing::State,
+    workflow: &Workflow,
+    worktree: &Worktree,
+    checkpoint: &str,
+    response: &mut Response,
+) -> Result<()> {
+    let mut preview = state.clone();
+    preview.status = Status::Running;
+    let mut proposed = response.clone();
+    proposed.candidate_commit = Some(checkpoint.to_owned());
+    preview.apply(workflow, proposed)?;
+    response.candidate_commit = Some(worktree.checkpoint_changes(checkpoint)?);
+    Ok(())
 }
 
 pub fn status(run_dir: &Path) -> Result<RunRecord> {
@@ -310,6 +333,7 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
         let mut packet = json!({"scratch_env":scratch_env, "schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "protected_inputs":stage.protected_inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":if gate == Gate::Reviewer { Some(stage.routes.keys().collect::<Vec<_>>()) } else { None }, "last_transition":record.state.last_transition, "review_worktree":review.as_ref()});
         if gate == Gate::Worker {
             packet["controller_checkpoint"] = json!(true);
+            packet["prompt_revision"] = json!(2);
             if stage.reviewer.is_empty() {
                 packet["direct_handoff"] = json!(true);
                 if stage.outputs.is_empty() {
@@ -400,13 +424,13 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
             && response.outcome == "complete"
             && response.candidate_commit.is_none()
         {
-            // Validate identity and the declared route before creating a checkpoint.
-            let mut preview = record.state.clone();
-            let mut proposed = response.clone();
-            proposed.candidate_commit = Some(checkpoint.clone());
-            preview.apply(&workflow, proposed)?;
-            response.candidate_commit =
-                Some(worktree.checkpoint_outputs(&checkpoint, &stage.outputs)?);
+            checkpoint_worker(
+                &record.state,
+                &workflow,
+                &worktree,
+                &checkpoint,
+                &mut response,
+            )?;
         }
         if let Some(review) = &review {
             review
@@ -683,4 +707,19 @@ pub fn reset(run_dir: &Path, acknowledge_external_effects: bool) -> Result<()> {
     record.state.unblock_used = false;
     store.save(&record)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::*;
+
+    #[test]
+    fn worker_prompt_explains_blocking_and_preserves_legacy_prompt() {
+        let current =
+            action_prompt(&json!({"controller_checkpoint": true, "prompt_revision": 2})).unwrap();
+        assert!(current.contains("If blocked, leave the checkout unchanged"));
+        assert!(current.contains("select a declared route"));
+        let legacy = action_prompt(&json!({"controller_checkpoint": true})).unwrap();
+        assert!(legacy.contains("Leave any other new or ignored files outside the checkout"));
+    }
 }

@@ -86,7 +86,7 @@ print(json.dumps(response))
     );
     assert!(!run.join("actions/action-2").exists());
 
-    // A report does not authorize an uncommitted checkout to advance.
+    // New nonignored role work is checkpointed even without a declared output.
     let script = repo.join("role.py");
     let source = fs::read_to_string(&script).unwrap();
     fs::write(
@@ -100,7 +100,7 @@ print(json.dumps(response))
     git(&repo, &["add", "role.py"]);
     git(&repo, &["commit", "-qm", "fixture leaves untracked file"]);
     let dirty_run = temp.path().join("dirty-run");
-    let rejected = Command::new(env!("CARGO_BIN_EXE_simon-says"))
+    let completed = Command::new(env!("CARGO_BIN_EXE_simon-says"))
         .args([
             "run",
             repo.join("workflow.toml").to_str().unwrap(),
@@ -111,9 +111,14 @@ print(json.dumps(response))
         ])
         .output()
         .unwrap();
-    assert!(!rejected.status.success());
-    assert!(!dirty_run.join("actions/action-1").exists());
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    assert!(dirty_run.join("actions/action-1").exists());
     assert!(dirty_run.join("worktree/untracked.txt").exists());
+    assert!(!repo.join("untracked.txt").exists());
 
     // A completed report can be adopted after preserving an ignored file,
     // without replaying the already executed role.

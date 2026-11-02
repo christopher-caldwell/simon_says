@@ -170,9 +170,9 @@ fn controller_checkpoints_direct_roles_and_routes_the_repair_loop() {
 }
 
 #[test]
-fn controller_does_not_checkpoint_an_invalid_route_or_unrelated_file() {
-    for (mode, unexpected) in [("unauthorized_route", false), ("repairable", true)] {
-        let (_temp, repo, run_dir) = automatic_checkpoint_fixture(mode, unexpected);
+fn controller_does_not_checkpoint_an_invalid_route() {
+    {
+        let (_temp, repo, run_dir) = automatic_checkpoint_fixture("unauthorized_route", false);
         assert!(!run(&repo, &run_dir).status.success());
         assert!(!run_dir.join("actions/action-1").exists());
         let head = Command::new("git")
@@ -189,10 +189,19 @@ fn controller_does_not_checkpoint_an_invalid_route_or_unrelated_file() {
             .unwrap()
             .to_owned();
         assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), base);
-        if unexpected {
-            assert!(run_dir.join("worktree/unexpected.txt").exists());
-        }
     }
+}
+
+#[test]
+fn controller_checkpoints_new_implementation_files_without_declaring_them_as_outputs() {
+    let (_temp, repo, run_dir) = automatic_checkpoint_fixture("repairable", true);
+    success(run(&repo, &run_dir));
+    assert_eq!(status(&run_dir)["state"]["status"], "complete");
+    assert_eq!(
+        fs::read_to_string(run_dir.join("worktree/unexpected.txt")).unwrap(),
+        "preserve"
+    );
+    assert!(!repo.join("unexpected.txt").exists());
 }
 
 #[test]

@@ -57,9 +57,7 @@ fn controller_checkpoint_preserves_source_and_treats_output_paths_literally() {
     let w = Worktree::create(&repo, &run).unwrap();
     fs::write(w.path.join("data"), "fixed").unwrap();
     fs::write(w.path.join(":(glob)output"), "result").unwrap();
-    let candidate = w
-        .checkpoint_outputs(&w.baseline, &[":(glob)output".into()])
-        .unwrap();
+    let candidate = w.checkpoint_changes(&w.baseline).unwrap();
     assert_ne!(candidate, w.baseline);
     w.verify_candidate(&candidate, &w.baseline).unwrap();
     assert_eq!(
@@ -71,7 +69,7 @@ fn controller_checkpoint_preserves_source_and_treats_output_paths_literally() {
 }
 
 #[test]
-fn controller_checkpoint_refuses_ignored_or_undeclared_staged_files() {
+fn controller_checkpoint_preserves_ignored_files_and_accepts_new_staged_files() {
     for ignored in [false, true] {
         let (_tmp, repo, run) = fixture();
         fs::write(repo.join(".gitignore"), "ignored\n").unwrap();
@@ -85,10 +83,17 @@ fn controller_checkpoint_refuses_ignored_or_undeclared_staged_files() {
         if !ignored {
             command(&w.path, &["add", "extra"]);
         }
-        assert!(w
-            .checkpoint_outputs(&w.baseline, &["result".into()])
-            .is_err());
-        assert_eq!(w.head().unwrap(), w.baseline);
+        if ignored {
+            assert!(w.checkpoint_changes(&w.baseline).is_err());
+            assert_eq!(w.head().unwrap(), w.baseline);
+        } else {
+            let candidate = w.checkpoint_changes(&w.baseline).unwrap();
+            assert_ne!(candidate, w.baseline);
+            assert_eq!(
+                command(&w.path, &["show", &format!("{candidate}:extra")]),
+                "keep"
+            );
+        }
         assert_eq!(fs::read_to_string(w.path.join(extra)).unwrap(), "keep");
         assert_eq!(fs::read_to_string(repo.join("data")).unwrap(), "baseline");
     }

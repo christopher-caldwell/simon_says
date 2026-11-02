@@ -23,16 +23,17 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, String) {
-    fixture_with_options(false, false, false, false)
+    fixture_with_options(false, false, false, false, false)
 }
 fn fixture_with_invalid_output(invalid: bool) -> (tempfile::TempDir, PathBuf, PathBuf, String) {
-    fixture_with_options(invalid, false, false, false)
+    fixture_with_options(invalid, false, false, false, false)
 }
 fn fixture_with_options(
     invalid: bool,
     filtered: bool,
     object_report: bool,
     direct: bool,
+    uncommitted: bool,
 ) -> (tempfile::TempDir, PathBuf, PathBuf, String) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
@@ -67,9 +68,22 @@ fn fixture_with_options(
             "Path(path).write_text('{}\\n')",
         );
     }
+    if uncommitted {
+        text = text.replace("        subprocess.run([\"git\", \"add\", \"--\", path], check=True)\n", "")
+            .replace("        subprocess.run([\"git\", \"-c\", \"user.name=Simon Says Fixture\", \"-c\", \"user.email=fixture@example.invalid\", \"commit\", \"-m\", f\"Create {path}\"], check=True, stdout=subprocess.DEVNULL)\n", "");
+    }
     let needle = "        output(packet, \"complete\", f\"Created {path} from the declared input.\", candidate=git(\"rev-parse\", \"HEAD\"))";
     assert_eq!(text.matches(needle).count(), 1);
-    fs::write(script, text.replace(needle, &format!("        if stage == 'validate':\n            Path('target').mkdir(exist_ok=True)\n            Path('target/evidence').write_text('preserve')\n{needle}"))).unwrap();
+    let with_cache = text.replace(needle, &format!("        if stage == 'validate':\n            Path('target').mkdir(exist_ok=True)\n            Path('target/evidence').write_text('preserve')\n{needle}"));
+    fs::write(
+        script,
+        if uncommitted {
+            with_cache.replace("candidate=git(\"rev-parse\", \"HEAD\")", "candidate=None")
+        } else {
+            with_cache
+        },
+    )
+    .unwrap();
     git(&repo, &["init", "-q"]);
     if filtered {
         git(&repo, &["config", "filter.slow.clean", "cat"]);
@@ -140,8 +154,56 @@ fn preserve(run: &Path) {
     .unwrap();
 }
 #[test]
+fn adopts_uncommitted_output_without_replaying_worker() {
+    for direct in [false, true] {
+        let (_tmp, _repo, run, before) = fixture_with_options(false, false, false, direct, true);
+        assert!(run.join("worktree/validation.json").exists());
+        preserve(&run);
+        let adopted = adopt(&run, "action-0", &before, true);
+        assert!(
+            adopted.status.success(),
+            "{}",
+            String::from_utf8_lossy(&adopted.stderr)
+        );
+        let saved = state(&run);
+        let candidate = if direct {
+            &saved["state"]["accepted_commit"]
+        } else {
+            &saved["state"]["candidate_commit"]
+        };
+        assert_ne!(candidate.as_str().unwrap(), before);
+        assert_eq!(
+            saved["state"]["gate"],
+            if direct { "worker" } else { "reviewer" }
+        );
+        let resumed = cli(&["resume", run.to_str().unwrap()]);
+        assert!(
+            resumed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&resumed.stderr)
+        );
+        assert_eq!(state(&run)["state"]["status"], "complete");
+        assert!(!run
+            .join(if direct {
+                "actions/action-2"
+            } else {
+                "actions/action-4"
+            })
+            .exists());
+    }
+}
+
+#[test]
+fn adoption_does_not_advance_with_invalid_uncommitted_output() {
+    let (_tmp, _repo, run, before) = fixture_with_options(true, false, false, false, true);
+    preserve(&run);
+    assert!(!adopt(&run, "action-0", &before, true).status.success());
+    assert_eq!(state(&run)["state"]["status"], "adoption_checking");
+    assert!(!run.join("actions/action-1").exists());
+}
+#[test]
 fn direct_handoff_can_adopt_verified_worker_without_replaying_it() {
-    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, false, true);
+    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, false, true, false);
     preserve(&run);
     let adopted = adopt(&run, "action-0", &candidate, true);
     assert!(
@@ -164,7 +226,7 @@ fn direct_handoff_can_adopt_verified_worker_without_replaying_it() {
 
 #[test]
 fn older_direct_worker_packet_without_controller_checkpoint_can_be_adopted() {
-    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, false, true);
+    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, false, true, false);
     preserve(&run);
     let path = run.join("actions/action-0/packet.json");
     let mut packet: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -172,6 +234,7 @@ fn older_direct_worker_packet_without_controller_checkpoint_can_be_adopted() {
         .as_object_mut()
         .unwrap()
         .remove("controller_checkpoint");
+    packet.as_object_mut().unwrap().remove("prompt_revision");
     fs::write(&path, serde_json::to_vec_pretty(&packet).unwrap()).unwrap();
     let adopted = adopt(&run, "action-0", &candidate, true);
     assert!(
@@ -363,7 +426,7 @@ fn legacy_packet_without_empty_scratch_environment_is_supported() {
 }
 #[test]
 fn interrupted_adoption_check_requires_explicit_reconciliation() {
-    let (tmp, repo, run, candidate) = fixture_with_options(false, true, false, false);
+    let (tmp, repo, run, candidate) = fixture_with_options(false, true, false, false, false);
     preserve(&run);
     let marker = tmp.path().join("filter-marker");
     let script = tmp.path().join("slow-filter.sh");
@@ -433,7 +496,7 @@ fn interrupted_adoption_check_requires_explicit_reconciliation() {
 
 #[test]
 fn adopts_recorded_structured_report_without_replaying_worker() {
-    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, true, false);
+    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, true, false, false);
     preserve(&run);
     let legacy = "invalid action response; reset required: invalid type: map, expected a string at line 1 column 54";
     let state_path = run.join("state.json");

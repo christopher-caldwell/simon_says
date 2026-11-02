@@ -295,17 +295,6 @@ pub fn prepare_with_session(
                         );
                         argv.extend(["--effort".into(), effort.clone()]);
                     }
-                    // Match Build's worker default. Explicit permission policy is trusted configuration.
-                    if gate == Gate::Worker && !has_claude_permission_policy(&role.args) {
-                        argv.extend([
-                            "--permission-mode".into(),
-                            "acceptEdits".into(),
-                            "--permission-prompts".into(),
-                            "none".into(),
-                            "--settings".into(),
-                            CLAUDE_WORKER_SANDBOX_SETTINGS.into(),
-                        ]);
-                    }
                     argv.extend(role.args.iter().cloned());
                     // As in Orchestrate, retain `--` so variadic native args cannot
                     // consume a positional prompt; Claude reads stdin when omitted.
@@ -432,6 +421,36 @@ fn has_claude_permission_policy(args: &[String]) -> bool {
                 | "--setting-sources"
         )
     })
+}
+
+/// Recognize, but never launch, the former implicit Claude Worker configuration
+/// when reconciling an already recorded action.
+pub(crate) fn legacy_claude_worker_plan(
+    role: &Role,
+    plan: &InvocationPlan,
+) -> Option<InvocationPlan> {
+    if role.kind != "agent"
+        || role.adapter.as_deref() != Some("claude")
+        || has_claude_permission_policy(&role.args)
+    {
+        return None;
+    }
+    let insertion = plan.argv.len().checked_sub(role.args.len() + 1)?;
+    let mut legacy = plan.clone();
+    legacy.argv.splice(
+        insertion..insertion,
+        [
+            "--permission-mode",
+            "acceptEdits",
+            "--permission-prompts",
+            "none",
+            "--settings",
+            CLAUDE_WORKER_SANDBOX_SETTINGS,
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
+    Some(legacy)
 }
 
 /// Execute a prepared plan. The command receives SIMON_PACKET as an absolute
@@ -915,5 +934,33 @@ fn content_text(value: Option<&Value>) -> Option<String> {
             (!parts.is_empty()).then(|| parts.join("\n"))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod legacy_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_claude_plan_is_only_recognized_for_unconfigured_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut role: Role = toml::from_str("kind = 'agent'\nadapter = 'claude'\nprofile = 'profile.md'\nargs = ['--verbose-extra']\n").unwrap();
+        let current = prepare(
+            &role,
+            Gate::Worker,
+            "prompt",
+            dir.path(),
+            &dir.path().join("packet"),
+        )
+        .unwrap();
+        assert!(!current.argv.iter().any(|arg| arg == "--settings"));
+        let legacy = legacy_claude_worker_plan(&role, &current).unwrap();
+        assert!(legacy
+            .argv
+            .windows(2)
+            .any(|args| args == ["--settings", CLAUDE_WORKER_SANDBOX_SETTINGS]));
+        assert_eq!(legacy.argv[legacy.argv.len() - 2], "--verbose-extra");
+        role.args = vec!["--settings".into(), "{}".into()];
+        assert!(legacy_claude_worker_plan(&role, &current).is_none());
     }
 }

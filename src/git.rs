@@ -729,9 +729,8 @@ impl Worktree {
         );
         clean_managed(&self.path)
     }
-    /// Checkpoint a direct role's tracked changes and declared new outputs.
-    /// Never add unrelated untracked or ignored files.
-    pub fn checkpoint_outputs(&self, checkpoint: &str, outputs: &[String]) -> Result<String> {
+    /// Checkpoint role work in the isolated checkout, preserving ignored files.
+    pub fn checkpoint_changes(&self, checkpoint: &str) -> Result<String> {
         self.verify_owned()?;
         detached(&self.path)?;
         no_hidden_index_changes(&self.path)?;
@@ -752,39 +751,7 @@ impl Worktree {
             ignored.stdout.is_empty(),
             "managed worktree contains ignored or untracked files; preserve them and reconcile explicitly"
         );
-        let untracked = git(
-            &self.path,
-            &["ls-files", "--others", "--exclude-standard", "-z"],
-        )?;
-        let added = git(
-            &self.path,
-            &[
-                "diff",
-                "--cached",
-                "--no-renames",
-                "--name-only",
-                "--diff-filter=A",
-                "-z",
-            ],
-        )?;
-        for path in untracked
-            .stdout
-            .split(|b| *b == 0)
-            .chain(added.stdout.split(|b| *b == 0))
-            .filter(|p| !p.is_empty())
-        {
-            ensure!(
-                outputs.iter().any(|output| output.as_bytes() == path),
-                "untracked or newly staged file is not a declared output: {:?}",
-                String::from_utf8_lossy(path)
-            );
-        }
-        git(&self.path, &["add", "-u", "--", "."])?;
-        if !outputs.is_empty() {
-            let mut args = vec!["--literal-pathspecs", "add", "--"];
-            args.extend(outputs.iter().map(String::as_str));
-            git(&self.path, &args)?;
-        }
+        git(&self.path, &["add", "--all", "--", "."])?;
         let changes = git(&self.path, &["diff", "--cached", "--name-only", "-z"])?;
         if !changes.stdout.is_empty() {
             git(
