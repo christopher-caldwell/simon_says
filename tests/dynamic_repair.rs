@@ -310,3 +310,34 @@ fn worker_selected_repeated_failure_respects_transition_limit() {
     assert_eq!(state["state"]["stage_transitions"], 3);
     assert!(!run_dir.join("actions/action-8").exists());
 }
+
+#[test]
+fn invalid_worker_route_never_dispatches_another_role() {
+    for mode in ["missing_route", "unauthorized_route"] {
+        let (_temp, repo, run_dir) = fixture_for("worker-dispatch", mode, false);
+        let output = run(&repo, &run_dir);
+        assert!(!output.status.success());
+        let state = status(&run_dir);
+        assert_eq!(state["state"]["status"], "running");
+        assert_eq!(state["state"]["gate"], "worker");
+        assert!(!run_dir.join("actions/action-1").exists());
+        let resumed = cli(&["resume", run_dir.to_str().unwrap()]);
+        assert!(!resumed.status.success());
+        assert!(!run_dir.join("actions/action-1").exists());
+    }
+}
+
+#[test]
+fn reviewer_can_reject_the_workers_selected_route() {
+    let (_temp, repo, run_dir) = fixture_for("worker-dispatch", "wrong_route", false);
+    let output = run(&repo, &run_dir);
+    assert!(!output.status.success());
+    let state = status(&run_dir);
+    assert_eq!(state["state"]["status"], "stopped");
+    assert_eq!(state["state"]["stop_reason"], "review cycle limit reached");
+    assert_eq!(action_response(&run_dir, 0)["route"], "clean");
+    assert_eq!(action_response(&run_dir, 1)["outcome"], "changes_required");
+    assert_eq!(action_response(&run_dir, 2)["route"], "clean");
+    assert_eq!(action_response(&run_dir, 3)["outcome"], "changes_required");
+    assert!(!run_dir.join("actions/action-4").exists());
+}

@@ -48,7 +48,14 @@ def main():
                   "observed_value": 0 if issue else 42}
         Path("simulation.json").write_text(json.dumps(result) + "\n")
         candidate = commit(["simulation.json"], "Record probe observation")
-        return emit(packet, "complete", f"Probe exited {probe.returncode}: {probe.stderr.strip() or probe.stdout.strip()}", candidate=candidate, route="issues" if issue else "clean")
+        route = "issues" if issue else "clean"
+        if mode == "wrong_route":
+            route = "clean" if issue else "issues"
+        elif mode == "unauthorized_route":
+            route = "not_declared"
+        elif mode == "missing_route":
+            route = None
+        return emit(packet, "complete", f"Probe exited {probe.returncode}: {probe.stderr.strip() or probe.stdout.strip()}", candidate=candidate, route=route)
     if gate == "worker" and stage == "repair" and role == "repair_specialist":
         observation = read("simulation.json")
         if not observation["issue"]:
@@ -71,10 +78,6 @@ def main():
             route = "issues" if result["issue"] else "clean"
             if packet["candidate_route"] != route:
                 return emit(packet, "changes_required", "Correct the proposed route.", inspected=head)
-            if mode == "unauthorized_route":
-                route = "not_declared"
-            elif mode == "missing_route":
-                route = None
             return emit(packet, "pass", "Inspected the exact simulated observation.", inspected=head, route=None)
         if stage == "repair":
             repair, result = read("repair.json"), read("simulation.json")
