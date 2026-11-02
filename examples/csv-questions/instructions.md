@@ -1,1 +1,1 @@
-Carry out the configured role in the action packet. Work only on its declared output, commit the output, and return the required protocol response. The original CSV and previous stage outputs are authoritative inputs.
+Carry out the configured role in the action packet. Work on its declared output and return the required response. The original CSV and previous stage outputs are authoritative inputs. Simon records the checkpoint.

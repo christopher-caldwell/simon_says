@@ -169,6 +169,21 @@ fn write_result(path: &Path, data: &impl serde::Serialize) -> Result<()> {
     Ok(())
 }
 pub(crate) fn action_prompt(packet: &serde_json::Value) -> Result<String> {
+    if packet
+        .get("controller_checkpoint")
+        .and_then(|v| v.as_bool())
+        == Some(true)
+    {
+        let route = if packet.get("worker_routes").is_some() {
+            "When complete, include one route from worker_routes."
+        } else {
+            "Omit route."
+        };
+        return Ok(format!(
+            "Perform your assigned role using the packet below. The prior role's result, if any, is in last_transition.report. Write any declared outputs. Return one JSON object with action_id, outcome (complete or blocked), and a nonempty report. {route} Simon checkpoints your changes; you do not need to commit. Leave any other new or ignored files outside the checkout. Packet: {}",
+            serde_json::to_string(packet)?
+        ));
+    }
     if packet.get("report_only").and_then(|v| v.as_bool()) == Some(true) {
         let route = if packet.get("worker_routes").is_some() {
             "When complete, include one route from worker_routes."
@@ -293,10 +308,13 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
         let scratch = store.reserve(&action_id)?;
         let scratch_env = provider::scratch_environment(role, &scratch)?;
         let mut packet = json!({"scratch_env":scratch_env, "schema_version":1, "run_id":record.run_id, "action_id":action_id, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":gate, "role":role_name, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "protected_inputs":stage.protected_inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":if gate == Gate::Reviewer { Some(stage.routes.keys().collect::<Vec<_>>()) } else { None }, "last_transition":record.state.last_transition, "review_worktree":review.as_ref()});
-        if gate == Gate::Worker && stage.reviewer.is_empty() {
-            packet["direct_handoff"] = json!(true);
-            if stage.outputs.is_empty() {
-                packet["report_only"] = json!(true);
+        if gate == Gate::Worker {
+            packet["controller_checkpoint"] = json!(true);
+            if stage.reviewer.is_empty() {
+                packet["direct_handoff"] = json!(true);
+                if stage.outputs.is_empty() {
+                    packet["report_only"] = json!(true);
+                }
             }
         }
         if stage.worker_selects_route() {
@@ -379,12 +397,16 @@ fn execute_locked(store: &RunStore) -> Result<RunRecord> {
         )
         .context("invalid action response; reset required")?;
         if gate == Gate::Worker
-            && stage.reviewer.is_empty()
-            && stage.outputs.is_empty()
             && response.outcome == "complete"
             && response.candidate_commit.is_none()
         {
-            response.candidate_commit = Some(worktree.head()?);
+            // Validate identity and the declared route before creating a checkpoint.
+            let mut preview = record.state.clone();
+            let mut proposed = response.clone();
+            proposed.candidate_commit = Some(checkpoint.clone());
+            preview.apply(&workflow, proposed)?;
+            response.candidate_commit =
+                Some(worktree.checkpoint_outputs(&checkpoint, &stage.outputs)?);
         }
         if let Some(review) = &review {
             review

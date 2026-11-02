@@ -170,6 +170,43 @@ fn provider_failure_remains_uncertain_until_explicit_reset() {
     let s: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(s["state"]["status"], "ready");
 }
+
+#[test]
+fn failed_role_with_uncommitted_output_is_not_checkpointed_or_replayed() {
+    let (_tmp, project, run) = setup();
+    let workflow = project.join("workflow.toml");
+    let definition = fs::read_to_string(&workflow)
+        .unwrap()
+        .replace("reviewer = \"reviewer\"\n", "")
+        .replace("unblocker = \"unblocker\"\n", "")
+        .replace("max_review_cycles = 3\n", "");
+    fs::write(workflow, definition).unwrap();
+    fs::write(project.join("workflow_action.py"), "from pathlib import Path\nimport sys\nPath('validation.json').write_text('partial')\nsys.exit(7)\n").unwrap();
+    git(&project, &["add", "workflow.toml", "workflow_action.py"]);
+    git(&project, &["commit", "-qm", "fail after writing output"]);
+    assert!(!run_cli(&project, &run).status.success());
+    let saved = state(&run);
+    assert_eq!(saved["state"]["status"], "running");
+    let head = Command::new("git")
+        .args([
+            "-C",
+            run.join("worktree").to_str().unwrap(),
+            "rev-parse",
+            "HEAD",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&head.stdout).trim(),
+        saved["worktree"]["baseline"].as_str().unwrap()
+    );
+    assert_eq!(
+        fs::read_to_string(run.join("worktree/validation.json")).unwrap(),
+        "partial"
+    );
+    assert!(!cli(&["resume", run.to_str().unwrap()]).status.success());
+    assert!(!run.join("actions/action-1").exists());
+}
 fn change_script(p: &Path, f: impl FnOnce(String) -> String) {
     let path = p.join("workflow_action.py");
     let old = fs::read_to_string(&path).unwrap();
@@ -247,6 +284,44 @@ fn worker_unblock_retry_and_review_correction_are_routed_with_feedback() {
         .contains("Correction required."));
     assert!(!packet["candidate_commit"].is_null());
     assert_eq!(state(&r)["state"]["status"], "complete");
+}
+
+#[test]
+fn controller_checkpoints_worker_corrections_for_exact_review() {
+    let (_tmp, project, run) = setup();
+    change_script(&project, |s| {
+        s.replace(
+            "Path(path).write_text(json.dumps(expected, indent=2) + \"\\n\")",
+            "value = dict(expected)\n        if stage == 'validate' and not packet['feedback']:\n            value['total'] += 1\n        Path(path).write_text(json.dumps(value, indent=2) + \"\\n\")",
+        )
+        .replace("        subprocess.run([\"git\", \"add\", \"--\", path], check=True)\n", "")
+        .replace("        subprocess.run([\"git\", \"-c\", \"user.name=Simon Says Fixture\", \"-c\", \"user.email=fixture@example.invalid\", \"commit\", \"-m\", f\"Create {path}\"], check=True, stdout=subprocess.DEVNULL)\n", "")
+        .replace("candidate=git(\"rev-parse\", \"HEAD\")", "candidate=None")
+    });
+    let result = run_cli(&project, &run);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(state(&run)["state"]["status"], "complete");
+    let first: serde_json::Value =
+        serde_json::from_slice(&fs::read(run.join("actions/action-1/outcome.json")).unwrap())
+            .unwrap();
+    let review: serde_json::Value =
+        serde_json::from_str(first["response"].as_str().unwrap()).unwrap();
+    assert_eq!(review["outcome"], "changes_required");
+    let correction: serde_json::Value =
+        serde_json::from_slice(&fs::read(run.join("actions/action-2/outcome.json")).unwrap())
+            .unwrap();
+    let worker: serde_json::Value =
+        serde_json::from_str(correction["response"].as_str().unwrap()).unwrap();
+    assert!(worker["candidate_commit"].is_null());
+    let next_review: serde_json::Value =
+        serde_json::from_slice(&fs::read(run.join("actions/action-3/packet.json")).unwrap())
+            .unwrap();
+    assert_eq!(next_review["gate"], "reviewer");
+    assert_ne!(next_review["candidate_commit"], review["inspected_commit"]);
 }
 #[test]
 fn repeated_worker_block_stops_after_one_unblocker() {

@@ -50,6 +50,49 @@ fn clean_isolated_worktree_and_exact_candidates() {
         "candidate"
     );
 }
+
+#[test]
+fn controller_checkpoint_preserves_source_and_treats_output_paths_literally() {
+    let (_tmp, repo, run) = fixture();
+    let w = Worktree::create(&repo, &run).unwrap();
+    fs::write(w.path.join("data"), "fixed").unwrap();
+    fs::write(w.path.join(":(glob)output"), "result").unwrap();
+    let candidate = w
+        .checkpoint_outputs(&w.baseline, &[":(glob)output".into()])
+        .unwrap();
+    assert_ne!(candidate, w.baseline);
+    w.verify_candidate(&candidate, &w.baseline).unwrap();
+    assert_eq!(
+        command(&w.path, &["show", &format!("{candidate}::(glob)output")]),
+        "result"
+    );
+    assert_eq!(fs::read_to_string(repo.join("data")).unwrap(), "baseline");
+    assert!(!repo.join(":(glob)output").exists());
+}
+
+#[test]
+fn controller_checkpoint_refuses_ignored_or_undeclared_staged_files() {
+    for ignored in [false, true] {
+        let (_tmp, repo, run) = fixture();
+        fs::write(repo.join(".gitignore"), "ignored\n").unwrap();
+        command(&repo, &["add", ".gitignore"]);
+        command(&repo, &["commit", "-qm", "ignore fixture"]);
+        let w = Worktree::create(&repo, &run).unwrap();
+        fs::write(w.path.join("data"), "fix").unwrap();
+        fs::write(w.path.join("result"), "output").unwrap();
+        let extra = if ignored { "ignored" } else { "extra" };
+        fs::write(w.path.join(extra), "keep").unwrap();
+        if !ignored {
+            command(&w.path, &["add", "extra"]);
+        }
+        assert!(w
+            .checkpoint_outputs(&w.baseline, &["result".into()])
+            .is_err());
+        assert_eq!(w.head().unwrap(), w.baseline);
+        assert_eq!(fs::read_to_string(w.path.join(extra)).unwrap(), "keep");
+        assert_eq!(fs::read_to_string(repo.join("data")).unwrap(), "baseline");
+    }
+}
 #[test]
 fn source_dirty_and_existing_worktree_are_refused() {
     let (_d, repo, run) = fixture();

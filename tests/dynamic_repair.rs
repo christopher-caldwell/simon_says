@@ -109,6 +109,119 @@ fn direct_fixture(mode: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     (temp, repo, run)
 }
 
+fn automatic_checkpoint_fixture(
+    mode: &str,
+    unexpected_file: bool,
+) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let (temp, repo, run) = direct_fixture(mode);
+    let script = repo.join("action.py");
+    let source = fs::read_to_string(&script).unwrap();
+    let old = "    subprocess.run([\"git\", \"add\", \"--\", *paths], check=True)\n    subprocess.run([\"git\", \"-c\", \"user.name=Dynamic Repair\", \"-c\", \"user.email=fixture@example.invalid\", \"commit\", \"-qm\", message], check=True)\n    return git(\"rev-parse\", \"HEAD\")";
+    assert_eq!(source.matches(old).count(), 1);
+    let replacement = if unexpected_file {
+        "    Path('unexpected.txt').write_text('preserve')\n    return None"
+    } else {
+        "    return None"
+    };
+    fs::write(script, source.replace(old, replacement)).unwrap();
+    git(&repo, &["add", "action.py"]);
+    git(&repo, &["commit", "-qm", "let controller checkpoint"]);
+    (temp, repo, run)
+}
+
+#[test]
+fn controller_checkpoints_before_an_independent_review() {
+    let (_temp, repo, run_dir) = fixture_for("worker-dispatch", "repairable", false);
+    let script = repo.join("action.py");
+    let source = fs::read_to_string(&script).unwrap();
+    let old = "    subprocess.run([\"git\", \"add\", \"--\", *paths], check=True)\n    subprocess.run([\"git\", \"-c\", \"user.name=Dynamic Repair\", \"-c\", \"user.email=fixture@example.invalid\", \"commit\", \"-qm\", message], check=True)\n    return git(\"rev-parse\", \"HEAD\")";
+    assert_eq!(source.matches(old).count(), 1);
+    fs::write(script, source.replace(old, "    return None")).unwrap();
+    git(&repo, &["add", "action.py"]);
+    git(&repo, &["commit", "-qm", "controller creates candidates"]);
+    success(run(&repo, &run_dir));
+    assert_eq!(status(&run_dir)["state"]["status"], "complete");
+    for index in [0, 2, 4] {
+        assert!(action_response(&run_dir, index)["candidate_commit"].is_null());
+        let review = read(&run_dir.join(format!("actions/action-{}/packet.json", index + 1)));
+        let inspected = action_response(&run_dir, index + 1);
+        assert_eq!(review["candidate_commit"], inspected["inspected_commit"]);
+    }
+    assert!(!run_dir.join("actions/action-6").exists());
+}
+
+#[test]
+fn controller_checkpoints_direct_roles_and_routes_the_repair_loop() {
+    let (_temp, repo, run_dir) = automatic_checkpoint_fixture("repairable", false);
+    success(run(&repo, &run_dir));
+    assert_eq!(status(&run_dir)["state"]["status"], "complete");
+    for (index, role) in ["simulator", "repair_specialist", "simulator"]
+        .iter()
+        .enumerate()
+    {
+        let packet = read(&run_dir.join(format!("actions/action-{index}/packet.json")));
+        assert_eq!(packet["role"], *role);
+        assert_eq!(packet["controller_checkpoint"], true);
+        assert!(action_response(&run_dir, index)["candidate_commit"].is_null());
+    }
+    assert_eq!(read(&run_dir.join("worktree/engine.json"))["correct"], true);
+    assert_eq!(read(&repo.join("engine.json"))["correct"], false);
+    assert!(!run_dir.join("actions/action-3").exists());
+}
+
+#[test]
+fn controller_does_not_checkpoint_an_invalid_route_or_unrelated_file() {
+    for (mode, unexpected) in [("unauthorized_route", false), ("repairable", true)] {
+        let (_temp, repo, run_dir) = automatic_checkpoint_fixture(mode, unexpected);
+        assert!(!run(&repo, &run_dir).status.success());
+        assert!(!run_dir.join("actions/action-1").exists());
+        let head = Command::new("git")
+            .args([
+                "-C",
+                run_dir.join("worktree").to_str().unwrap(),
+                "rev-parse",
+                "HEAD",
+            ])
+            .output()
+            .unwrap();
+        let base = status(&run_dir)["worktree"]["baseline"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), base);
+        if unexpected {
+            assert!(run_dir.join("worktree/unexpected.txt").exists());
+        }
+    }
+}
+
+#[test]
+fn controller_does_not_checkpoint_an_action_with_the_wrong_identity() {
+    let (_temp, repo, run_dir) = automatic_checkpoint_fixture("repairable", false);
+    let script = repo.join("action.py");
+    let source = fs::read_to_string(&script).unwrap();
+    let old = "\"action_id\": packet[\"action_id\"]";
+    assert_eq!(source.matches(old).count(), 1);
+    fs::write(script, source.replace(old, "\"action_id\": \"wrong\"")).unwrap();
+    git(&repo, &["add", "action.py"]);
+    git(&repo, &["commit", "-qm", "wrong action identity"]);
+    assert!(!run(&repo, &run_dir).status.success());
+    let head = Command::new("git")
+        .args([
+            "-C",
+            run_dir.join("worktree").to_str().unwrap(),
+            "rev-parse",
+            "HEAD",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&head.stdout).trim(),
+        status(&run_dir)["worktree"]["baseline"].as_str().unwrap()
+    );
+    assert!(!run_dir.join("actions/action-1").exists());
+}
+
 #[test]
 fn direct_roles_route_issue_to_fixer_and_recheck_without_review_actions() {
     let (_temp, repo, run_dir) = direct_fixture("repairable");

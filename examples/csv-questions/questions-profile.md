@@ -1,1 +1,1 @@
-Read data.csv and write questions.json. Pick two useful, answerable quantitative questions about the actual CSV, each with a distinct short id. Avoid questions that need information outside the file. Use the packet's JSON output schema. Commit questions.json and return the action response.
+Read data.csv and write questions.json. Pick two useful, answerable quantitative questions about the actual CSV, each with a distinct short id. Avoid questions that need information outside the file. Use the packet's JSON output schema. Return the action response.

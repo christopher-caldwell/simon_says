@@ -161,6 +161,27 @@ fn direct_handoff_can_adopt_verified_worker_without_replaying_it() {
     assert_eq!(state(&run)["state"]["status"], "complete");
     assert!(!run.join("actions/action-2").exists());
 }
+
+#[test]
+fn older_direct_worker_packet_without_controller_checkpoint_can_be_adopted() {
+    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, false, true);
+    preserve(&run);
+    let path = run.join("actions/action-0/packet.json");
+    let mut packet: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    packet
+        .as_object_mut()
+        .unwrap()
+        .remove("controller_checkpoint");
+    fs::write(&path, serde_json::to_vec_pretty(&packet).unwrap()).unwrap();
+    let adopted = adopt(&run, "action-0", &candidate, true);
+    assert!(
+        adopted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&adopted.stderr)
+    );
+    assert_eq!(state(&run)["state"]["status"], "ready");
+    assert_eq!(state(&run)["state"]["accepted_commit"], candidate);
+}
 #[test]
 fn adopts_verified_candidate_without_replaying_worker_and_survives_restart() {
     let (_tmp, _repo, run, candidate) = fixture();

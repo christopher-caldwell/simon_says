@@ -1,6 +1,6 @@
 # Simon Says
 
-Simon Says is an early local, sequential workflow runner. A TOML definition assigns named roles to stages; the Rust controller validates and snapshots the definition, launches roles, checks their Git checkpoints and declared artifacts, and follows authored, bounded transitions. Reviewers and Unblockers are optional per stage. Authors define their own named role profiles; the controller does not contain a domain-specific Fixer. This is **not yet an accepted v0 release**: see [implementation status](docs/implementation/status.md) for evidence and open reliability limitations.
+Simon Says is an early local, sequential workflow runner. A TOML definition assigns named roles to stages; the Rust controller validates and snapshots the definition, launches roles, checkpoints role work, checks Git checkpoints and declared artifacts, and follows authored, bounded transitions. Reviewers and Unblockers are optional per stage. Authors define their own named role profiles; the controller does not contain a domain-specific Fixer. This is **not yet an accepted v0 release**: see [implementation status](docs/implementation/status.md) for evidence and open reliability limitations.
 
 Its core jobs are to read the workflow, launch its configured roles, pass their reports and declared files between stages, follow the workflow's declared routes, and preserve run state. A model or tool performs the work defined by its role; Simon does not decide domain-specific answers.
 

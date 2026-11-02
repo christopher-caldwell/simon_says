@@ -729,6 +729,83 @@ impl Worktree {
         );
         clean_managed(&self.path)
     }
+    /// Checkpoint a direct role's tracked changes and declared new outputs.
+    /// Never add unrelated untracked or ignored files.
+    pub fn checkpoint_outputs(&self, checkpoint: &str, outputs: &[String]) -> Result<String> {
+        self.verify_owned()?;
+        detached(&self.path)?;
+        no_hidden_index_changes(&self.path)?;
+        let head = git_text(&self.path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+        ancestor(&self.path, &self.baseline, checkpoint)?;
+        ancestor(&self.path, checkpoint, &head)?;
+        let ignored = git(
+            &self.path,
+            &[
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "-z",
+            ],
+        )?;
+        ensure!(
+            ignored.stdout.is_empty(),
+            "managed worktree contains ignored or untracked files; preserve them and reconcile explicitly"
+        );
+        let untracked = git(
+            &self.path,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+        )?;
+        let added = git(
+            &self.path,
+            &[
+                "diff",
+                "--cached",
+                "--no-renames",
+                "--name-only",
+                "--diff-filter=A",
+                "-z",
+            ],
+        )?;
+        for path in untracked
+            .stdout
+            .split(|b| *b == 0)
+            .chain(added.stdout.split(|b| *b == 0))
+            .filter(|p| !p.is_empty())
+        {
+            ensure!(
+                outputs.iter().any(|output| output.as_bytes() == path),
+                "untracked or newly staged file is not a declared output: {:?}",
+                String::from_utf8_lossy(path)
+            );
+        }
+        git(&self.path, &["add", "-u", "--", "."])?;
+        if !outputs.is_empty() {
+            let mut args = vec!["--literal-pathspecs", "add", "--"];
+            args.extend(outputs.iter().map(String::as_str));
+            git(&self.path, &args)?;
+        }
+        let changes = git(&self.path, &["diff", "--cached", "--name-only", "-z"])?;
+        if !changes.stdout.is_empty() {
+            git(
+                &self.path,
+                &[
+                    "-c",
+                    "user.name=Simon Says",
+                    "-c",
+                    "user.email=simon-says@localhost",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-m",
+                    "Record workflow action",
+                ],
+            )?;
+        }
+        let candidate = git_text(&self.path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+        self.verify_candidate(&candidate, checkpoint)?;
+        Ok(candidate)
+    }
     /// Explicitly discard tracked changes in this verified worktree and restore
     /// a known checkpoint. Any untracked *or ignored* files cause refusal: Git
     /// reset may otherwise overwrite them. Never removes untracked files.

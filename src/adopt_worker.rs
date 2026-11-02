@@ -179,6 +179,9 @@ pub fn adopt(
             expected_packet["report_only"] = json!(true);
         }
     }
+    if packet.get("controller_checkpoint").is_some() {
+        expected_packet["controller_checkpoint"] = json!(true);
+    }
     if stage.worker_selects_route() {
         expected_packet["worker_routes"] = json!(stage.routes.keys().collect::<Vec<_>>());
     }
@@ -249,7 +252,9 @@ pub fn adopt(
             .as_deref()
             .context("Worker response missing")?,
     )?;
-    if stage.reviewer.is_empty() && stage.outputs.is_empty() && response.candidate_commit.is_none()
+    if response.candidate_commit.is_none()
+        && (packet.get("controller_checkpoint").and_then(Value::as_bool) == Some(true)
+            || (stage.reviewer.is_empty() && stage.outputs.is_empty()))
     {
         response.candidate_commit = Some(worktree.head()?);
     }
