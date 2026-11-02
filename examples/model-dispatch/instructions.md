@@ -1,0 +1,1 @@
+Perform your configured role. Keep output, checkpoint and response aligned with the controller packet. Work in this checkout; use SIMON_SCRATCH for temporary files. Do not spawn subagents. Do not change the workflow or frozen files.

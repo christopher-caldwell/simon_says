@@ -23,15 +23,16 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, String) {
-    fixture_with_options(false, false, false)
+    fixture_with_options(false, false, false, false)
 }
 fn fixture_with_invalid_output(invalid: bool) -> (tempfile::TempDir, PathBuf, PathBuf, String) {
-    fixture_with_options(invalid, false, false)
+    fixture_with_options(invalid, false, false, false)
 }
 fn fixture_with_options(
     invalid: bool,
     filtered: bool,
     object_report: bool,
+    direct: bool,
 ) -> (tempfile::TempDir, PathBuf, PathBuf, String) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
@@ -41,6 +42,15 @@ fn fixture_with_options(
         if entry.path().is_file() {
             fs::copy(entry.path(), repo.join(entry.file_name())).unwrap();
         }
+    }
+    if direct {
+        let path = repo.join("workflow.toml");
+        let definition = fs::read_to_string(&path)
+            .unwrap()
+            .replace("reviewer = \"reviewer\"\n", "")
+            .replace("unblocker = \"unblocker\"\n", "")
+            .replace("max_review_cycles = 3\n", "");
+        fs::write(path, definition).unwrap();
     }
     fs::write(repo.join(".gitignore"), "target/\n").unwrap();
     if filtered {
@@ -128,6 +138,28 @@ fn preserve(run: &Path) {
         run.join("actions/action-0/scratch/preserved-target"),
     )
     .unwrap();
+}
+#[test]
+fn direct_handoff_can_adopt_verified_worker_without_replaying_it() {
+    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, false, true);
+    preserve(&run);
+    let adopted = adopt(&run, "action-0", &candidate, true);
+    assert!(
+        adopted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&adopted.stderr)
+    );
+    assert_eq!(state(&run)["state"]["status"], "ready");
+    assert_eq!(state(&run)["state"]["accepted_commit"], candidate);
+    assert_eq!(state(&run)["state"]["stage"], "report");
+    let result = cli(&["resume", run.to_str().unwrap()]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(state(&run)["state"]["status"], "complete");
+    assert!(!run.join("actions/action-2").exists());
 }
 #[test]
 fn adopts_verified_candidate_without_replaying_worker_and_survives_restart() {
@@ -310,7 +342,7 @@ fn legacy_packet_without_empty_scratch_environment_is_supported() {
 }
 #[test]
 fn interrupted_adoption_check_requires_explicit_reconciliation() {
-    let (tmp, repo, run, candidate) = fixture_with_options(false, true, false);
+    let (tmp, repo, run, candidate) = fixture_with_options(false, true, false, false);
     preserve(&run);
     let marker = tmp.path().join("filter-marker");
     let script = tmp.path().join("slow-filter.sh");
@@ -380,7 +412,7 @@ fn interrupted_adoption_check_requires_explicit_reconciliation() {
 
 #[test]
 fn adopts_recorded_structured_report_without_replaying_worker() {
-    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, true);
+    let (_tmp, _repo, run, candidate) = fixture_with_options(false, false, true, false);
     preserve(&run);
     let legacy = "invalid action response; reset required: invalid type: map, expected a string at line 1 column 54";
     let state_path = run.join("state.json");

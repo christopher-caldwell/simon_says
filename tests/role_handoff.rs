@@ -188,3 +188,42 @@ fn optional_approval_can_be_disabled_by_author_before_run() {
     assert_eq!(done["state"]["status"], "complete");
     assert!(done["state"]["approvals"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn authored_roles_can_handoff_without_automatic_review_or_unblocker() {
+    let (_root, repo, run_dir, context) = fixture(false);
+    let workflow = repo.join("workflow.toml");
+    let definition = fs::read_to_string(&workflow)
+        .unwrap()
+        .replace("reviewer = \"reviewer\"\n", "")
+        .replace("unblocker = \"unblocker\"\n", "")
+        .replace("max_review_cycles = 2\n", "");
+    fs::write(workflow, definition).unwrap();
+    git(&repo, &["add", "workflow.toml"]);
+    git(&repo, &["commit", "-qm", "direct handoffs"]);
+    let output = run(&repo, &run_dir, &context);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(status(&run_dir)["state"]["status"], "complete");
+    for (index, role) in [
+        "investigator",
+        "supervisor",
+        "analyzer",
+        "fixer",
+        "finalizer",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let packet = read(&run_dir.join(format!("actions/action-{index}/packet.json")));
+        assert_eq!(packet["role"], *role);
+    }
+    assert!(!run_dir.join("actions/action-5").exists());
+    assert_eq!(
+        read(&run_dir.join("worktree/final.json"))["answer"],
+        "3 observations were recorded."
+    );
+}

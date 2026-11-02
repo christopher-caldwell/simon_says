@@ -94,6 +94,60 @@ fn success(output: Output) {
     );
 }
 
+fn direct_fixture(mode: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let (temp, repo, run) = fixture_for("worker-dispatch", mode, false);
+    let path = repo.join("workflow.toml");
+    let definition = fs::read_to_string(&path)
+        .unwrap()
+        .replace("reviewer = \"quality_reviewer\"\n", "")
+        .replace("unblocker = \"stop\"\n", "")
+        .replace("max_review_cycles = 2\n", "")
+        .replace("route_selector = \"worker\"\n", "");
+    fs::write(path, definition).unwrap();
+    git(&repo, &["add", "workflow.toml"]);
+    git(&repo, &["commit", "-qm", "direct routing"]);
+    (temp, repo, run)
+}
+
+#[test]
+fn direct_roles_route_issue_to_fixer_and_recheck_without_review_actions() {
+    let (_temp, repo, run_dir) = direct_fixture("repairable");
+    success(run(&repo, &run_dir));
+    assert_eq!(status(&run_dir)["state"]["status"], "complete");
+    for (index, role) in ["simulator", "repair_specialist", "simulator"]
+        .iter()
+        .enumerate()
+    {
+        let packet = read(&run_dir.join(format!("actions/action-{index}/packet.json")));
+        assert_eq!(packet["role"], *role);
+    }
+    assert_eq!(read(&run_dir.join("worktree/engine.json"))["correct"], true);
+    assert!(!run_dir.join("actions/action-3").exists());
+}
+
+#[test]
+fn direct_role_cannot_select_an_undeclared_route() {
+    let (_temp, repo, run_dir) = direct_fixture("unauthorized_route");
+    assert!(!run(&repo, &run_dir).status.success());
+    assert!(!run_dir.join("actions/action-1").exists());
+    assert_eq!(status(&run_dir)["state"]["stage"], "simulate");
+}
+
+#[test]
+fn direct_handoff_rejects_invalid_output_before_dispatching_next_role() {
+    let (_temp, repo, run_dir) = direct_fixture("repairable");
+    fs::write(
+        repo.join("result.schema.json"),
+        r#"{"type":"object","required":["missing"]}"#,
+    )
+    .unwrap();
+    git(&repo, &["add", "result.schema.json"]);
+    git(&repo, &["commit", "-qm", "require missing output"]);
+    assert!(!run(&repo, &run_dir).status.success());
+    assert_eq!(status(&run_dir)["state"]["stage"], "simulate");
+    assert!(!run_dir.join("actions/action-1").exists());
+}
+
 #[test]
 fn issue_dispatches_authored_repair_role_and_rechecks_the_fixed_candidate() {
     let (_temp, repo, run_dir) = fixture("repairable", false);

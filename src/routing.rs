@@ -158,7 +158,7 @@ impl State {
             .stages
             .get(&self.stage)
             .ok_or_else(|| anyhow::anyhow!("unknown current stage"))?;
-        let worker_selects = stage.route_selector.as_deref() == Some("worker");
+        let worker_selects = stage.worker_selects_route();
         let destination =
             if self.gate == Gate::Worker && response.outcome == "complete" && worker_selects {
                 let label = response
@@ -220,8 +220,18 @@ impl State {
                 self.candidate_commit = Some(commit.to_owned());
                 self.candidate_route = response.route.clone();
                 self.feedback.push(response.report);
-                self.gate = Gate::Reviewer;
                 self.unblock_used = false;
+                if stage.reviewer.is_empty() {
+                    let route = self.candidate_route.take();
+                    let next = match &route {
+                        Some(label) => stage.routes.get(label).expect("validated route"),
+                        None => &stage.on_pass,
+                    };
+                    self.accepted_commit = self.candidate_commit.take().unwrap();
+                    self.advance(workflow, next, &response.action_id, route.as_deref());
+                } else {
+                    self.gate = Gate::Reviewer;
+                }
             }
             (Gate::Reviewer, "pass" | "changes_required" | "blocked") => {
                 ensure!(
@@ -279,7 +289,7 @@ impl State {
                             self.unblock_used = false;
                         }
                     }
-                    _ => self.block(),
+                    _ => self.block(!stage.unblocker.is_empty()),
                 }
             }
             (Gate::Worker, "blocked") => {
@@ -288,7 +298,7 @@ impl State {
                     "blocked worker cannot report commits"
                 );
                 self.feedback.push(response.report);
-                self.block();
+                self.block(!stage.unblocker.is_empty());
             }
             (Gate::Unblocker, "retry" | "blocked") => {
                 ensure!(
@@ -435,8 +445,11 @@ impl State {
             self.status = Status::Ready;
         }
     }
-    fn block(&mut self) {
-        if self.unblock_used {
+    fn block(&mut self, has_unblocker: bool) {
+        if !has_unblocker {
+            self.status = Status::Stopped;
+            self.stop_reason = Some("action blocked; no unblocker configured".into());
+        } else if self.unblock_used {
             self.status = Status::Stopped;
             self.stop_reason = Some("repeated block after retry".into());
         } else {

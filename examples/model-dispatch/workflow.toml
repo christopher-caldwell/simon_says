@@ -1,0 +1,37 @@
+schema_version = 1
+name = "direct-model-repair"
+start = "observe"
+max_stage_transitions = 4
+frozen_project_files = ["workflow.toml", "probe.py", "observe.md", "fix.md", "instructions.md", "result.schema.json", "repair.schema.json"]
+[roles.observer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+profile = "observe.md"
+timeout_seconds = 300
+[roles.fixer]
+kind = "agent"
+adapter = "codex"
+model = "gpt-6-luna"
+effort = "medium"
+profile = "fix.md"
+timeout_seconds = 300
+[stages.observe]
+worker = "observer"
+instructions = "instructions.md"
+inputs = ["engine.json"]
+outputs = ["simulation.json"]
+output_schema = "result.schema.json"
+on_pass = "complete"
+[stages.observe.routes]
+issues = "fix"
+clean = "complete"
+[stages.fix]
+worker = "fixer"
+instructions = "instructions.md"
+inputs = ["simulation.json", "engine.json"]
+protected_inputs = ["simulation.json"]
+outputs = ["repair.json"]
+output_schema = "repair.schema.json"
+on_pass = "observe"

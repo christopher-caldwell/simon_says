@@ -6,6 +6,7 @@ The [observed autonomy gaps](autonomy-gaps.md) document controller and workflow 
 
 ## Implemented
 
+- Direct role-to-role stages may omit Reviewer and Unblocker; the Worker selects declared routes and validated checkpoints advance directly. A blocked action without an Unblocker stops. Independent review remains available where configured.
 - Strict versioned TOML loading, named pass routes and optional bounded Worker- or Reviewer-selected routes, reference and path checks, frozen instructions/profiles/schemas and explicitly declared project authority files, and draft-07 JSON Schema compilation and artifact validation. Per-stage `protected_inputs` can pin previously reviewed artifacts against each stage's starting checkpoint.
 - A locked durable JSON run record and per-action packet, exact invocation, transport logs, result/failure; `preparing` is persisted before action-specific Git checks and checkout, and `running` before action invocation. Interrupted or failed actions require explicit reset rather than automatic replay.
 - Detached worker and review worktrees, full Git object identity and ancestry checks, tracked regular-file artifact checks, separate candidate and accepted commits, and a narrowly verified reset that refuses untracked or ignored files.

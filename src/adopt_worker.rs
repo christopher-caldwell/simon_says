@@ -173,7 +173,10 @@ pub fn adopt(
         .map(|p| snapshot.files.get(p).context("frozen profile missing"))
         .transpose()?;
     let mut expected_packet = json!({"schema_version":1, "run_id":record.run_id, "action_id":expected_action, "template_digest":snapshot.sha256, "workflow_purpose":workflow.purpose, "run_context":snapshot.run_context, "stage":record.state.stage, "gate":Gate::Worker, "role":stage.worker, "baseline_commit":record.state.accepted_commit, "candidate_commit":record.state.candidate_commit, "inputs":stage.inputs, "protected_inputs":stage.protected_inputs, "outputs":stage.outputs, "output_schema":stage.output_schema.as_ref().and_then(|p| snapshot.files.get(p)), "instructions":instructions, "profile":profile, "feedback":record.state.feedback, "unblock_origin":record.state.unblock_origin, "review_routes":null, "last_transition":record.state.last_transition, "review_worktree":null});
-    if stage.route_selector.as_deref() == Some("worker") {
+    if stage.reviewer.is_empty() {
+        expected_packet["direct_handoff"] = json!(true);
+    }
+    if stage.worker_selects_route() {
         expected_packet["worker_routes"] = json!(stage.routes.keys().collect::<Vec<_>>());
     }
     if packet.get("scratch_env").is_some() {
@@ -268,10 +271,20 @@ pub fn adopt(
     record.state.status = Status::Running;
     record.state.stop_reason = None;
     record.state.apply(&workflow, response)?;
-    ensure!(
-        record.state.status == Status::Ready && record.state.gate == Gate::Reviewer,
-        "adoption did not lead to independent review"
-    );
+    if stage.reviewer.is_empty() {
+        ensure!(
+            matches!(
+                record.state.status,
+                Status::Ready | Status::Complete | Status::Stopped
+            ),
+            "adoption did not reach a stable direct handoff"
+        );
+    } else {
+        ensure!(
+            record.state.status == Status::Ready && record.state.gate == Gate::Reviewer,
+            "adoption did not lead to independent review"
+        );
+    }
     store.save(&record)?;
     Ok(record)
 }

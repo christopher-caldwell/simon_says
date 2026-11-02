@@ -42,6 +42,8 @@ if worker:
     subprocess.run(['git','-c','user.name=Fake','-c','user.email=fake@example.invalid','commit','-qm','candidate'], check=True)
     head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
     response = {'action_id': p['action_id'], 'outcome': 'complete', 'report':'candidate', 'candidate_commit':head, 'inspected_commit':None}
+    if p.get('worker_routes'):
+        response['route'] = 'again' if prior == 0 else 'next'
     if os.environ.get('FAKE_IGNORED') == '1':
         pathlib.Path('target').mkdir(exist_ok=True)
         pathlib.Path('target/evidence').write_text('preserve')
@@ -412,6 +414,37 @@ fn reviewed_self_transition_is_a_new_stage_visit_and_never_resumes_worker() {
         plan(&run_dir, 2)["session_in"].is_null(),
         "a route back to the same stage is a fresh visit"
     );
+}
+
+#[test]
+fn direct_self_transition_starts_a_fresh_worker_session() {
+    let (_t, repo, run_dir, path) = fixture(2, true);
+    let f = repo.join("workflow.toml");
+    let t = fs::read_to_string(&f)
+        .unwrap()
+        .replace(
+            "start = \"first\"",
+            "start = \"first\"\nmax_stage_transitions = 4",
+        )
+        .replace("reviewer = \"review\"\n", "")
+        .replace("unblocker = \"stop\"\n", "")
+        .replace("max_review_cycles = 2\n", "")
+        .replace(
+            "[stages.second]",
+            "[stages.first.routes]\nagain = \"first\"\nnext = \"second\"\n[stages.second]",
+        );
+    fs::write(&f, t).unwrap();
+    git(&repo, &["add", "workflow.toml"]);
+    git(&repo, &["commit", "-qm", "direct self transition"]);
+    let out = run(&repo, &run_dir, &path, false);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(state(&run_dir)["state"]["status"], "complete");
+    assert!(plan(&run_dir, 1)["session_in"].is_null());
+    assert!(plan(&run_dir, 2)["session_in"].is_null());
 }
 
 #[test]

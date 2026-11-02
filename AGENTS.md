@@ -4,7 +4,7 @@ This repository contains an **early generic runtime**, not an accepted v0 releas
 
 ## Principal objective
 
-A stable Rust execution engine must run new model-authored workflows without requiring engine-code edits. It must retain Orchestrate's durable Worker/Reviewer/Unblocker feedback and Git-checkpoint safety.
+A stable Rust execution engine must run new model-authored workflows without requiring engine-code edits. A stage may dispatch its configured role directly to the next stage; review and unblocking are workflow choices. Preserve Orchestrate's durable Worker/Reviewer/Unblocker feedback and Git-checkpoint safety when those mechanisms are configured.
 
 ## Rules
 

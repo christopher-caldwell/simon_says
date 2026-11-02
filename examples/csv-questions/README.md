@@ -17,9 +17,6 @@ simon-says run workflow.toml --project . --run-dir /absolute/new/run
 
 Results appear in the run worktree as `questions.json`, `evidence.json`, and
 `answers.json`. The controller checks the JSON shapes and each exact Git
-candidate. The command Reviewer checks the candidate identity only: it does
-not verify whether the code actually ran or whether the answers are correct.
-Inspect the model action logs for executed commands and use an appropriate
-workflow-defined reviewer if independent domain verification is required.
+candidate. This example has no Reviewer: inspect the model action logs for executed commands. Add a workflow-defined Reviewer if independent verification is required.
 Model names are local provider configuration and may need to be changed for a
 different installation. This example uses real model calls and consumes tokens.

@@ -317,3 +317,25 @@ fn csv_model_workflow_is_valid_and_has_three_authored_roles() {
     assert_eq!(workflow.stages["gather"].on_pass, "analyze");
     assert_eq!(workflow.stages["analyze"].on_pass, "complete");
 }
+
+#[test]
+fn direct_handoff_cannot_request_a_missing_review() {
+    let root = Path::new("examples/model-dispatch");
+    let template = fs::read_to_string(root.join("workflow.toml")).unwrap();
+    Workflow::parse_and_validate(&template, root).unwrap();
+    for option in [
+        "route_selector = \"reviewer\"",
+        "approval_required = true",
+        "max_review_cycles = 1",
+    ] {
+        let altered = template.replacen(
+            "on_pass = \"complete\"",
+            &format!("on_pass = \"complete\"\n{option}"),
+            1,
+        );
+        assert!(
+            Workflow::parse_and_validate(&altered, root).is_err(),
+            "accepted {option}"
+        );
+    }
+}

@@ -51,7 +51,9 @@ pub struct Role {
 #[serde(deny_unknown_fields)]
 pub struct Stage {
     pub worker: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reviewer: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub unblocker: String,
     pub instructions: String,
     #[serde(default)]
@@ -71,7 +73,14 @@ pub struct Stage {
     /// Stop after review until the accepted checkpoint is explicitly approved.
     #[serde(default)]
     pub approval_required: bool,
+    #[serde(default)]
     pub max_review_cycles: u32,
+}
+impl Stage {
+    pub(crate) fn worker_selects_route(&self) -> bool {
+        self.route_selector.as_deref() == Some("worker")
+            || (self.reviewer.is_empty() && !self.routes.is_empty())
+    }
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -333,7 +342,15 @@ impl Workflow {
                 identifier(name) && name != "complete",
                 "invalid stage name {name:?}"
             );
-            for role in [&stage.worker, &stage.reviewer, &stage.unblocker] {
+            ensure!(
+                w.roles.contains_key(&stage.worker),
+                "stage {name}: unknown role {}",
+                stage.worker
+            );
+            for role in [&stage.reviewer, &stage.unblocker]
+                .into_iter()
+                .filter(|role| !role.is_empty())
+            {
                 ensure!(
                     w.roles.contains_key(role),
                     "stage {name}: unknown role {role}"
@@ -352,6 +369,10 @@ impl Workflow {
                 ensure!(
                     !stage.routes.is_empty(),
                     "stage {name}: route_selector requires routes"
+                );
+                ensure!(
+                    selector != "reviewer" || !stage.reviewer.is_empty(),
+                    "stage {name}: reviewer route selection requires a reviewer"
                 );
             }
             if !stage.routes.is_empty() {
@@ -374,10 +395,21 @@ impl Workflow {
                     );
                 }
             }
-            ensure!(
-                (1..=100).contains(&stage.max_review_cycles),
-                "stage {name}: max_review_cycles must be 1..=100"
-            );
+            if stage.reviewer.is_empty() {
+                ensure!(
+                    !stage.approval_required,
+                    "stage {name}: approval requires a reviewer"
+                );
+                ensure!(
+                    stage.max_review_cycles == 0,
+                    "stage {name}: review cycles require a reviewer"
+                );
+            } else {
+                ensure!(
+                    (1..=100).contains(&stage.max_review_cycles),
+                    "stage {name}: max_review_cycles must be 1..=100"
+                );
+            }
             ensure!(
                 !stage.outputs.is_empty(),
                 "stage {name}: at least one output is required"

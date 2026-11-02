@@ -60,6 +60,19 @@ fn bounded_unblock_retries_origin_and_stops_on_second_block() {
     assert_eq!(s.status, Status::Stopped);
 }
 #[test]
+fn blocked_action_without_unblocker_stops_with_its_report() {
+    let (mut w, mut s) = setup();
+    w.stages.get_mut("validate").unwrap().unblocker.clear();
+    act(&mut s, &w, "blocked", None, None);
+    assert_eq!(s.status, Status::Stopped);
+    assert_eq!(
+        s.stop_reason.as_deref(),
+        Some("action blocked; no unblocker configured")
+    );
+    assert_eq!(s.feedback, vec!["full feedback"]);
+    assert_eq!(s.accepted_commit, "baseline");
+}
+#[test]
 fn reviewer_block_retries_same_candidate() {
     let (w, mut s) = setup();
     act(&mut s, &w, "complete", Some("candidate"), None);
